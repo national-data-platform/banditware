@@ -1,20 +1,30 @@
 from typing import Dict, List, Tuple
 import numpy as np
+import pathlib
 # for linear regression
 from sklearn.linear_model import LinearRegression
 import plotly.express as px
 import pandas as pd
 
+this_dir = pathlib.Path(__file__).resolve().parent
 
 def main():
+    # Create results directory
+    results_dir = this_dir / "results"
+    results_dir.mkdir(exist_ok=True, parents=True)
+    
+
     # five different combos of hardware with N_FEATURES for mean
-    N_HARDWARE = 3
-    N_FEATURES = 10
+    N_HARDWARE = 2
+    N_FEATURES = 1
     N_ROUNDS = 100
+
+    # Setting up the decaying epsilon
     e_start = 1 # epsilon
     e_decay = 0.9
     e_min = 0.0
 
+    # This is made up data - should be replaced with real data to be the ground truth
     noise_mean, noise_std = np.random.random(N_HARDWARE) * 5, np.random.random(N_HARDWARE) * 0.1
     coef_truth = np.random.random(size=(N_HARDWARE,N_FEATURES)) * 4 - 2
 
@@ -30,27 +40,27 @@ def main():
             for hardware_idx in range(N_HARDWARE)
         ])
     )
-
-
-    # Use e-greedy algo to find the best hardware for after 40 runs feeding the information back
-    # to the algo
-    # e-greedy algo
+    # Use e-greedy algo to find the best hardware 
     # samples gathered over time
     # samples = {1: [(workflow, runtime), ...], ...}
     # where workflow is a list of workflow features (input features)
     samples: Dict[int, List[Tuple[List[float], float]]] = {i: [] for i in range(N_HARDWARE)}
-    # Estimated coefficients
+    
+    # Estimated coefficients (this is what we are trying to find)
     coefs: Dict[int, List[float]] = {i: np.zeros(N_FEATURES) for i in range(N_HARDWARE)}
-    # Estimated noise coefficients (mean, std)
+    
+    # Estimated noise coefficients (mean, std) 
     noise_coefs: Dict[int, Tuple[float, float]] = {i: (0, 0) for i in range(N_HARDWARE)}
     rows_predictions = []
     rows_runtime = []
     e = e_start
+    
     for round_i in range(N_ROUNDS):
+        # Made up workflow - should be replaced with real data
         workflow = np.random.random(N_FEATURES)
-        if np.random.random() < e:
+        if np.random.random() < e:  # explore
             hardware_idx = np.random.randint(N_HARDWARE)
-        else:
+        else:  # exploit
             hardware_idx = np.argmin([
                 np.dot(coefs[i], workflow) + noise_coefs[i][0] # predicted runtime
                 for i in range(N_HARDWARE)
@@ -79,8 +89,10 @@ def main():
         e = max(e * e_decay, e_min)
 
         # Evaluate how good the model is at this point
+        # Imagine you are fixing the coeffs found as the true equation and testing for several points
         for samples_idx in range(N_HARDWARE):
             for h_idx in range(N_HARDWARE):
+                # Made up workflow - should be replaced with real data
                 workflow = np.random.random(N_FEATURES)
                 predicted_runtime = np.dot(coefs[h_idx], workflow) + noise_coefs[h_idx][0]
                 actual_runtime = sample_runtime(h_idx, workflow)
@@ -96,18 +108,19 @@ def main():
         df_predictions, x="round", y="error", color="hardware",
         template="simple_white"
     )
-    fig.write_html("predictions.html")
-    fig.write_image("predictions.png")
+    fig.write_html(f"{results_dir}/predictions.html")
+    fig.write_image(f"{results_dir}/predictions.png")
 
     df_runtime = pd.DataFrame(rows_runtime)
     # plot actual - best runtime over rounds
     df_runtime["error"] = df_runtime["runtime"] - df_runtime["best_runtime"]
     fig = px.line(
-        df_runtime, x="round", y="error",
+        df_runtime, x="round",
+        y="error",
         template="simple_white"
     )
-    fig.write_html("error.html")
-    fig.write_image("error.png")
+    fig.write_html(f"{results_dir}/error.html")
+    fig.write_image(f"{results_dir}/error.png")
 
 
     df_runtime = df_runtime.melt(id_vars=["round"], value_vars=["runtime", "best_runtime"])
@@ -115,8 +128,8 @@ def main():
         df_runtime, x="round", y="value", color="variable",
         template="simple_white"
     )
-    fig.write_html("runtime.html")
-    fig.write_image("runtime.png")
+    fig.write_html(f"{results_dir}/runtime.html")
+    fig.write_image(f"{results_dir}/runtime.png")
 
     # Plot epsilon over rounds
     df_epsilon = pd.DataFrame({
@@ -129,8 +142,8 @@ def main():
     )
     # set plot y axis to 0-1
     fig.update_yaxes(range=[0, 1])
-    fig.write_html("epsilon.html")
-    fig.write_image("epsilon.png")
+    fig.write_html(f"{results_dir}/epsilon.html")
+    fig.write_image(f"{results_dir}/epsilon.png")
 
 
     print(f"Predicted Coefs")
@@ -165,8 +178,8 @@ def main():
             facet_col="Hardware",
             template="simple_white"
         )
-        fig.write_html("cb.html")
-        fig.write_image("cb.png")
+        fig.write_html(f"{results_dir}/cb.html")
+        fig.write_image(f"{results_dir}/cb.png")
 
 
 if __name__ == "__main__":
