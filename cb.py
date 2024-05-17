@@ -15,8 +15,8 @@ def main():
     
 
     # five different combos of hardware with N_FEATURES for mean
-    N_HARDWARE = 2
-    N_FEATURES = 1
+    N_HARDWARE = 2 #(#cpu, mem) - (2, 16), (2, 8), (3, 24)
+    N_FEATURES = 1 # inputs from the workflow, runtime
     N_ROUNDS = 100
 
     # Setting up the decaying epsilon
@@ -103,6 +103,8 @@ def main():
                 })
 
     df_predictions = pd.DataFrame(rows_predictions)
+    # print the hardware with the lowest error over all rounds summed up
+    print("best_hardware:", df_predictions.groupby("hardware")["error"].sum().idxmin())
     df_predictions = df_predictions.groupby(["round", "hardware"]).mean().reset_index()
     fig = px.line(
         df_predictions, x="round", y="error", color="hardware",
@@ -121,7 +123,6 @@ def main():
     )
     fig.write_html(f"{results_dir}/error.html")
     fig.write_image(f"{results_dir}/error.png")
-
 
     df_runtime = df_runtime.melt(id_vars=["round"], value_vars=["runtime", "best_runtime"])
     fig = px.line(
@@ -153,6 +154,8 @@ def main():
         print(f"Predicted Noise Coefs: {noise_coefs[hardware_idx]}")
         print(f"Actual Coefs: {coef_truth[hardware_idx]}")
         print(f"Actual Noise Coefs: {noise_mean[hardware_idx], noise_std[hardware_idx]}")
+
+    
 
     if N_FEATURES == 1:
         # Plot prediction vs actual 
