@@ -54,6 +54,12 @@ def main():
     rows_predictions = []
     rows_runtime = []
     e = e_start
+
+    def get_best_hardware(workflow):
+        return  np.argmin([
+            np.dot(coefs[i], workflow) + noise_coefs[i][0] # predicted runtime
+            for i in range(N_HARDWARE)
+        ])
     
     for round_i in range(N_ROUNDS):
         # Made up workflow - should be replaced with real data
@@ -61,10 +67,7 @@ def main():
         if np.random.random() < e:  # explore
             hardware_idx = np.random.randint(N_HARDWARE)
         else:  # exploit
-            hardware_idx = np.argmin([
-                np.dot(coefs[i], workflow) + noise_coefs[i][0] # predicted runtime
-                for i in range(N_HARDWARE)
-            ])
+            hardware_idx = get_best_hardware(workflow)
 
         # Update the samples
         actual_runtime = sample_runtime(hardware_idx, workflow)
@@ -102,9 +105,12 @@ def main():
                     "error": np.abs(predicted_runtime - actual_runtime)
                 })
 
+
+    best_hardware_idx = get_best_hardware([0.5])
+    print(f"Best hardware: {best_hardware_idx}")
+
     df_predictions = pd.DataFrame(rows_predictions)
     # print the hardware with the lowest error over all rounds summed up
-    print("best_hardware:", df_predictions.groupby("hardware")["error"].sum().idxmin())
     df_predictions = df_predictions.groupby(["round", "hardware"]).mean().reset_index()
     fig = px.line(
         df_predictions, x="round", y="error", color="hardware",
