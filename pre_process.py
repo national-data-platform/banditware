@@ -12,14 +12,14 @@ this_dir = pathlib.Path(__file__).resolve().parent
 class Hardware(enum.Enum):
     """Characterize hardware by the number of cpus and memory in a tuple (#cpu, mem (MB)), for example: H1 = (1, 16)"""
 
-    H1 = (2, 16)
-    H2 = (3, 24)
-    H3 = (4, 16)  # Add more if needed
+    H1 = [(2, 16), 0]
+    H2 = [(3, 24), 1]
+    H3 = [(4, 16), 2]  # Add more if needed
 
     @classmethod
     def from_spec(cls, cpus, mem):
         for hardware in cls:
-            if hardware.value == (cpus, mem):
+            if hardware.value[0] == (cpus, mem):
                 return hardware
         raise ValueError(f"No matching hardware for {cpus} CPUs and {mem} MB memory.")
     
@@ -90,7 +90,7 @@ def identify_hardware(data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
 def extend_df(df: pd.DataFrame, hardware: Hardware, ext_df: pd.DataFrame) -> pd.DataFrame:
     """Extend the dataframe with the hardware information"""
     
-    df["hardware"] = hardware.name
+    df["hardware"] = hardware.value[1]
     ext_df = pd.concat([ext_df, df], ignore_index=True)
 
     return ext_df   
@@ -114,6 +114,12 @@ def clean_data(data: pd.DataFrame) -> pd.DataFrame:
 
     # Remove unamed column
     data = data.loc[:, ~data.columns.str.contains('^Unnamed')]
+    # replace NaN with 0    
+    data.fillna(0, inplace=True)
+
+    # have to do this for now
+    shared_areas = [1053216.0, 1854216.0, 1369900.0, 828144.0, 2543220.0]
+    data = data[data['area'].isin(shared_areas)]
     
     return data
 
@@ -126,15 +132,16 @@ def main():
     # print(dfs)
 
     full_df = identify_hardware(dfs)
-    print(full_df)
 
     full_df = clean_data(full_df)
-    
+
+
     # Save the data in a csv file 
     save_dir = this_dir.joinpath("results/data")
     save_dir.mkdir(parents=True, exist_ok=True)
     full_df.to_csv(f"{save_dir}/data.csv", index=False)
- 
+    
+    
 
 if __name__ == "__main__":
     main()
