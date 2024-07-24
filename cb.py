@@ -8,18 +8,20 @@ import pathlib
 import plotly.express as px
 
 from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error  # for RMSE calculation
+
 
 this_dir = pathlib.Path(__file__).parent.absolute()
 results_dir = this_dir / "results"
 
 FEATURE_COLS = [
-    # "canopy_moisture",
+    "canopy_moisture",
     # "run_max_mem_rss_bytes",
     # "sim_time",
-    # "surface_moisture",
+    "surface_moisture",
     # "threads",
-    # "wind_direction",
-    # "wind_speed",
+    "wind_direction",
+    "wind_speed",
     # "run_uuid",
     "area",
     # "runtime",
@@ -94,7 +96,7 @@ def main():
 
 
     # Use e-greedy algo to find the best hardware
-    N_ROUNDS = 30
+    N_ROUNDS = 100
     # Setting up the decaying epsilon
     e_start = 1 # epsilon
     e_decay = 0.99
@@ -109,6 +111,7 @@ def main():
     # Estimated noise coefficients (mean, std) 
     noise_coefs: Dict[int, Tuple[float, float]] = {i: (0, 0) for i in unique_hardware}
     rows_runtime = []
+    rmse_values = []  # To store RMSE for each round
     e = e_start
     
     # iterate through unique_features in a random order
@@ -140,9 +143,18 @@ def main():
         coefs[hardware] = reg.coef_
         noise_coefs[hardware] = (reg.intercept_, np.std(reg.predict(X) - y))
 
+        # Calculate quality of the model on *all* the data
+        X_all = data[FEATURE_COLS].values
+        y_all = data["runtime"].values
+        y_pred = np.array([np.dot(coefs[h], x) + noise_coefs[h][0] for h, x in zip(data["hardware"], X_all)])
+        rmse = np.sqrt(mean_squared_error(y_all, y_pred))
+
+        rmse_values.append(rmse)
+
         # Decay epsilon
         e = max(e * e_decay, e_min)
     
+    # print("Final RMSE values for each round:", rmse_values)
     
     # Print predicted and actual best hardware for each workflow
     rows_pred = []
@@ -152,6 +164,31 @@ def main():
         rows_pred.append([idx, best_hardware, actual_best_hardware])
     df_pred = pd.DataFrame(rows_pred, columns=["workflow", "predicted_best_hardware", "actual_best_hardware"])
     print(df_pred)
+
+    # get RMSE of full fit (coef_truth, noise_mean, noise_std)
+    y_pred = np.array([np.dot(coef_truth[h], x) + noise_mean[h] for h, x in zip(data["hardware"], data[FEATURE_COLS].values)])
+    rmse_full = np.sqrt(mean_squared_error(data["runtime"].values, y_pred))
+
+    # Plot RMSE over time
+    fig = px.line(
+        x=range(N_ROUNDS),
+        y=rmse_values,
+        title="RMSE over time",
+        template="simple_white",
+        labels={"x": "Round", "y": "RMSE"}
+    )
+    # add horizontal line for full fit RMSE
+    fig.add_hline(
+        y=rmse_full,
+        # line_dash="dot",
+        line_color="red",
+        line_width=2,
+        # annotation_text=f"Full fit RMSE: {rmse_full:.2f}",
+        # annotation_position="bottom right"
+    )
+    print(f"Full fit RMSE: {rmse_full:.2f}")
+    fig.write_html(f"{results_dir}/rmse.html")
+    fig.write_image(f"{results_dir}/rmse.png")
 
     if len(FEATURE_COLS) == 1:
         feature_col = FEATURE_COLS[0]
