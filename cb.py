@@ -14,33 +14,11 @@ from sklearn.metrics import mean_squared_error  # for RMSE calculation
 this_dir = pathlib.Path(__file__).parent.absolute()
 results_dir = this_dir / "results"
 
-ALL_FEATURE_COLS = [
-    "canopy_moisture",
-    # "run_max_mem_rss_bytes",
-    # "sim_time",
-    "surface_moisture",
-    # "threads",
-    "wind_direction",
-    "wind_speed",
-    # "run_uuid",
-    "area",
-    # "runtime",
-    # "cpu_usage_total",
-    # "mem_usage_total",
-    # "transmitted_packets_total",
-    # "received_packets_total",
-    # "transmitted_bandwidth_total",
-    # "received_bandwidth_total",
-    # "queue_seconds",
-    # "hardware"
-]
-
 @lru_cache(maxsize=None)
 def load_data(*feature_cols: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Load the data from the csv file"""
     feature_cols = list(feature_cols)
     _data = pd.read_csv(f"{this_dir}/results/data/data.csv")
-
     unique_features = _data[feature_cols].drop_duplicates().values
     unique_hardware = sorted(_data["hardware"].unique())
 
@@ -64,6 +42,10 @@ def load_data(*feature_cols: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
     
     data = pd.concat(datas)
     test_data = pd.concat(test_datas)
+
+    # rename hardware to integers 0, 1, 2, ...
+    hardware_mapping = {hardware: i for i, hardware in enumerate(unique_hardware)}
+    data["hardware"] = data["hardware"].map(hardware_mapping)
     
 
     return data, test_data
@@ -79,6 +61,7 @@ def run_sim(n_rounds: int = 100,
     unique_features = data[feature_cols].drop_duplicates().values
     unique_hardware = sorted(data["hardware"].unique())
 
+    
     @lru_cache(maxsize=None)
     def get_truth() -> Tuple[List[np.ndarray], List[float], List[float]]:
         """Get the true coefficients and noise for each hardware"""	
@@ -97,10 +80,14 @@ def run_sim(n_rounds: int = 100,
 
     def get_runtimes(features: np.ndarray, hardware: int) -> np.ndarray:
         """Get the runtime of a workflow on a specific hardware"""
-        filtered_data = data[
+    
+        filtered_data = data.loc[
             (data["hardware"] == hardware) &
             np.logical_and.reduce([data[col] == feature for col, feature in zip(feature_cols, features)])
         ]
+
+        if filtered_data.empty:
+            print(hardware, dict(zip(feature_cols, features)))
 
         return filtered_data["runtime"].values
 
@@ -208,6 +195,7 @@ def run_sim(n_rounds: int = 100,
                 })
 
         df = pd.DataFrame(rows)
+      
         fig = px.scatter(
             df, x="x", y="y", color="mode", 
             facet_col="Hardware",
@@ -217,8 +205,20 @@ def run_sim(n_rounds: int = 100,
             symbol="mode"
         )
 
+        # Rename the axis 
+        fig.update_xaxes(title_text=feature_cols[0])
+        fig.update_yaxes(title_text="Runtime", matches="y")
+
+        # Hide duplicate y-axis titles on other facets
+        for axis in fig.layout:
+            if axis.startswith("yaxis") and axis != "yaxis":
+                fig.layout[axis].title.text = ""
+
         fig.write_html(f"{savedir}/cb_{feature_cols[0]}.html")
         fig.write_image(f"{savedir}/cb_{feature_cols[0]}.png")
+
+        plot_motivation(df, feature_cols[0], savedir)
+        
 
     # compute rmse on full data (excluding test data)
     X_all = data[feature_cols].values
@@ -342,35 +342,89 @@ def run(n_sims: int,
         # Print how many % better the full fit is compared to the last round
         improvement = 100 * (1 - avg_rmse / rmse_full)
         print(f"Full fit is {improvement:.2f}% better than the fit in round {r}")
+    
+def plot_motivation(df: pd.DataFrame, feature_cols: str, savedir: pathlib.Path):
+    # Convert the Names of the hardwares 
+    # Mapping from integers to custom labels (H0, H1, H2, H3)
+    hardware_map = {
+        0: "H0",
+        1: "H1",
+        2: "H2",
+        3: "H3"
+    }
+    # Apply the mapping to the "Hardware" column
+    df["Hardware"] = df["Hardware"].map(hardware_map)
+    # Convert Hardware to a categorical type
+    df["Hardware"] = df["Hardware"].astype("category")
+
+    # Define custom color mapping for Hardware
+    color_map = {
+        "H0": "#FF6347",  # Tomato
+        "H1": "#4682B4",  # SteelBlue
+        "H2": "#32CD32",  # LimeGreen
+        "H3": "#FFD700",  # Gold
+    }
+    
+    fig2 = px.scatter(
+        df, 
+        x="x", 
+        y="y", 
+        color="Hardware",    # Color by Hardware
+        symbol="mode",       # Different symbols for actual and predicted
+        template="simple_white",
+        error_y="error",
+        opacity=0.8,
+        category_orders={"Hardware": df["Hardware"].unique().tolist()},
+        color_discrete_map=color_map
+    )
+
+    # Update marker size and add black borders
+    fig2.update_traces(marker=dict(
+        size=8,                     # Increase marker size (adjust as needed)
+        line=dict(
+            width=2,                 # Width of the border
+            color="black"            # Border color (black)
+        )
+    ))
+    
+    # Rename the axes
+    fig2.update_xaxes(title_text="Number of tasks")
+    fig2.update_yaxes(title_text="Makespan (s)")
+
+    # Save the figure
+    fig2.write_html(f"{savedir}/cb_motivation.html")
+    fig2.write_image(f"{savedir}/cb_motivation.png")
 
 def main():
     n_sims = 10
     n_rounds = 50
     
-    run_sim(
-        n_rounds=n_rounds,
-        feature_cols=["area"],
-        savedir=results_dir / "area"
-    )
 
     run(
         n_sims=n_sims,
         n_rounds=n_rounds,
-        feature_cols=["area"],
-        savedir=results_dir / "area"
+        feature_cols=["num_tasks"],
+        savedir=results_dir / "num_tasks"
     )
-    run(
-        n_sims=n_sims,
+
+    run_sim(
         n_rounds=n_rounds,
-        feature_cols=["wind_speed"],
-        savedir=results_dir / "wind_speed"
+        feature_cols=["num_tasks"],
+        savedir=results_dir / "num_tasks"
     )
-    run(
-        n_sims=n_sims,
-        n_rounds=n_rounds,
-        feature_cols=["area", "wind_speed", "wind_direction", "canopy_moisture", "surface_moisture"],
-        savedir=results_dir / "all"
-    )
+
+    # run(
+    #     n_sims=n_sims,
+    #     n_rounds=n_rounds,
+    #     feature_cols=["average_memory"],
+    #     savedir=results_dir / "average_memory"
+    # )
+    # run(
+    #     n_sims=n_sims,
+    #     n_rounds=n_rounds,
+    #     feature_cols=["average_cpu", "average_memory"],
+    #     savedir=results_dir / "all"
+    # )
 
 
 
