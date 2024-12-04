@@ -401,7 +401,7 @@ def run(n_sims: int,
         print(f"Average RMSE at round {r}: {avg_rmse:.2f} ± {std_rmse:.2f}")
 
         # Print how many % better the full fit is compared to the last round
-        improvement = 100 * (1 - avg_rmse / rmse_full)
+        improvement = 100 * (1 - rmse_full / avg_rmse)
         print(f"Full fit is {improvement:.2f}% better than the fit in round {r}")
 
 def main():
