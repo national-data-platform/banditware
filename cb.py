@@ -52,23 +52,23 @@ def load_data(*feature_cols: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
     
     # reserve 20% of the data for testing
     # must make sure that training data contains all feature/hardware combinations
-    datas = []
+    train_datas = []
     test_datas = []
     for features, hardware in product(unique_features, unique_hardware):
-        data: pd.DataFrame = _data[
+        full_data: pd.DataFrame = _data[
             (np.logical_and.reduce([_data[col] == feature for col, feature in zip(feature_cols, features)])) &
             (_data["hardware"] == hardware)
         ]
-        test_data = data.sample(frac=0.2)
-        data = data.drop(test_data.index)
-        datas.append(data)
+        test_data = full_data.sample(frac=0.2)
+        train_data = full_data.drop(test_data.index)
+        train_datas.append(train_data)
         test_datas.append(test_data)
     
-    data = pd.concat(datas)
+    train_data = pd.concat(train_datas)
     test_data = pd.concat(test_datas)
     
 
-    return data, test_data
+    return train_data, test_data
 
 def run_sim(n_rounds: int = 100,
             tolerance_ratio: float | None = None,
@@ -78,18 +78,19 @@ def run_sim(n_rounds: int = 100,
             feature_cols: List[str] = ["area"],
             savedir: pathlib.Path = None) -> pd.DataFrame:
     """Run a single simulation of the contextual bandit algorithm"""        
-    data, test_data = load_data(*feature_cols)
-    unique_features = data[feature_cols].drop_duplicates().values
-    unique_hardware = sorted(data["hardware"].unique())
+    train_data, test_data = load_data(*feature_cols)
+    unique_features = train_data[feature_cols].drop_duplicates().values
+    unique_hardware = sorted(train_data["hardware"].unique())
 
     @lru_cache(maxsize=None)
     def get_truth() -> Tuple[List[np.ndarray], List[float], List[float]]:
         """Get the true coefficients and noise for each hardware"""	
+        # TODO: should this be done with full data instead of train_data?
         bias_truth = []
         std_truth = []
         coef_truth = []
         for hardware in unique_hardware:
-            _data = data[data["hardware"] == hardware]
+            _data = train_data[train_data["hardware"] == hardware]
             X = _data[feature_cols].values
             y = _data["runtime"].values
             reg = LinearRegression().fit(X, y)
@@ -98,18 +99,20 @@ def run_sim(n_rounds: int = 100,
             std_truth.append(np.std(reg.predict(X) - y))
         return coef_truth, bias_truth, std_truth
 
-    def get_runtimes(features: np.ndarray, hardware: int) -> np.ndarray:
+    def get_runtimes(features: np.ndarray, hardware: int, from_test=False) -> np.ndarray:
         """Get the runtime of a workflow on a specific hardware"""
-        filtered_data = data[
-            (data["hardware"] == hardware) &
-            np.logical_and.reduce([data[col] == feature for col, feature in zip(feature_cols, features)])
+        # get the runtimes from either the test or the train data
+        df = test_data if from_test else train_data
+        filtered_data = df[
+            (df["hardware"] == hardware) &
+            np.logical_and.reduce([df[col] == feature for col, feature in zip(feature_cols, features)])
         ]
 
         return filtered_data["runtime"].values
 
-    def sample_runtime(features: np.ndarray, hardware: int) -> float:
+    def sample_runtime(features: np.ndarray, hardware: int, from_test: bool = False) -> float:
         """Sample the runtime of a workflow on a specific hardware"""
-        runtimes = get_runtimes(features, hardware)
+        runtimes = get_runtimes(features, hardware, from_test=from_test)
         return np.random.choice(runtimes)
 
     # def get_best_hardware(features: np.ndarray, hardware: List[int]) -> int:
@@ -119,8 +122,9 @@ def run_sim(n_rounds: int = 100,
     #     # get hardware with lowest average runtime for the given features
     #     return min(hardware, key=lambda h: np.mean(get_runtimes(features, h)))
 
-    def get_hardware_avg_runtimes(features:np.ndarray, hardware:List[int]) -> Dict[int, float]:
-        avg_hardware_runtimes = {h: np.mean(get_runtimes(features, h)) for h in hardware}
+    def get_hardware_avg_runtimes(features:np.ndarray, hardware:List[int], from_test=False) -> Dict[int, float]:
+        avg_hardware_runtimes = {h: np.mean(get_runtimes(features, h, from_test=from_test))
+                                for h in hardware}
         return avg_hardware_runtimes
 
     def get_best_hardware(avg_hardware_runtimes: Dict[int,float], tolerance_ratio: float | None) -> int:
@@ -170,7 +174,7 @@ def run_sim(n_rounds: int = 100,
     def get_best_hardwares(tolerance_ratio: float | None = None) -> List[int]:
         best_hardwares = []
         for features in test_data[feature_cols].values:
-            hardware_avg_runtimes = get_hardware_avg_runtimes(features, unique_hardware)
+            hardware_avg_runtimes = get_hardware_avg_runtimes(features, unique_hardware, from_test=True)
             best_hardware = get_best_hardware(hardware_avg_runtimes, tolerance_ratio)
             best_hardwares.append(best_hardware)
         return best_hardwares
@@ -226,10 +230,11 @@ def run_sim(n_rounds: int = 100,
         # noise_coefs[hardware] = (reg.intercept_, np.std(reg.predict(X) - y))
 
         # Calculate quality of the model on *all* the data
-        X_all = data[feature_cols].values
-        y_all = data["runtime"].values
-        y_pred = np.array([np.dot(coefs[h], x) + bias[h] for h, x in zip(data["hardware"], X_all)])
-        
+        # Todo: change these to use full_data ^^ instead of train_data? but then y pred seems omniscient
+        X_all = train_data[feature_cols].values
+        y_all = train_data["runtime"].values
+        y_pred = np.array([np.dot(coefs[h], x) + bias[h] 
+                           for h, x in zip(train_data["hardware"], X_all)])
         rmse = np.sqrt(mean_squared_error(y_all, y_pred))
         acc = get_model_accuracy(coefs, bias, std)
 
@@ -250,7 +255,7 @@ def run_sim(n_rounds: int = 100,
         feature_col = feature_cols[0]
         rows = []
         for hardware_idx in unique_hardware:
-            for x in np.linspace(data[feature_col].min(), data[feature_col].max(), 10):
+            for x in np.linspace(train_data[feature_col].min(), train_data[feature_col].max(), 10):
                 rows.append({
                     "x": x,
                     "y": coefs[hardware_idx][0] * x + bias[hardware_idx],
@@ -281,9 +286,9 @@ def run_sim(n_rounds: int = 100,
         fig.write_image(f"{savedir}/cb_{feature_cols[0]}.png")
 
     # compute rmse on full data (excluding test data)
-    X_all = data[feature_cols].values
-    y_all = data["runtime"].values
-    y_pred = np.array([np.dot(coef_truth[h], x) + bias_truth[h] for h, x in zip(data["hardware"], X_all)])
+    X_all = train_data[feature_cols].values
+    y_all = train_data["runtime"].values
+    y_pred = np.array([np.dot(coef_truth[h], x) + bias_truth[h] for h, x in zip(train_data["hardware"], X_all)])
     rmse = np.sqrt(mean_squared_error(y_all, y_pred))
 
     # compute accuracy on full data (excluding test data)
@@ -409,7 +414,7 @@ def main():
     n_rounds = 100
     # tolerance_ratio is a float >= 0 to represent the amount of slowdown allowed for a less resource intensive hardware
     # when set to None, it selects the fastest hardware without reassessing in the case of a tie.
-    tolerance_ratio: float | None = 0.0
+    tolerance_ratio: float | None = None
     
     run_sim(
         n_rounds=n_rounds,
