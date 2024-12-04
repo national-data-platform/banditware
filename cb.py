@@ -10,6 +10,8 @@ import plotly.express as px
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error  # for RMSE calculation
 
+from pre_process import Hardware
+
 
 this_dir = pathlib.Path(__file__).parent.absolute()
 results_dir = this_dir / "results"
@@ -69,6 +71,7 @@ def load_data(*feature_cols: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
     return data, test_data
 
 def run_sim(n_rounds: int = 100,
+            tolerance_ratio: float | None = None,
             e_start: float = 1,
             e_decay: float = 0.99,
             e_min: float = 0.0,
@@ -109,24 +112,81 @@ def run_sim(n_rounds: int = 100,
         runtimes = get_runtimes(features, hardware)
         return np.random.choice(runtimes)
 
-    def get_best_hardware(features: np.ndarray, hardware: List[int]) -> int:
-        # coef_truth, bias_truth, std_truth = get_truth()
-        # return min(hardware, key=lambda h: np.dot(coef_truth[h], features) + bias_truth[h])
+    # def get_best_hardware(features: np.ndarray, hardware: List[int]) -> int:
+    #     # coef_truth, bias_truth, std_truth = get_truth()
+    #     # return min(hardware, key=lambda h: np.dot(coef_truth[h], features) + bias_truth[h])
 
-        # get hardware with lowest average runtime for the given features
-        return min(hardware, key=lambda h: np.mean(get_runtimes(features, h)))
+    #     # get hardware with lowest average runtime for the given features
+    #     return min(hardware, key=lambda h: np.mean(get_runtimes(features, h)))
+
+    def get_hardware_avg_runtimes(features:np.ndarray, hardware:List[int]) -> Dict[int, float]:
+        avg_hardware_runtimes = {h: np.mean(get_runtimes(features, h)) for h in hardware}
+        return avg_hardware_runtimes
+
+    def get_best_hardware(avg_hardware_runtimes: Dict[int,float], tolerance_ratio: float | None) -> int:
+        """
+        Determines the best hardware within an acceptable runtime tolerance, preferring options with fewer resources. If tolerance_ratio is 0, only updates best_hardware in case of a tie for runtimes. If tolerace_ratio is None, returns the fastest hardware without updating
+
+        Parameters:
+            avg_hardware_runtimes: Dictionary of hardware configurations mapped to their average runtimes.
+            tolerance_ratio: Fraction of acceptable runtime increase for choosing hardware with fewer resources. 
+                Ex: tolerance_ratio=0.1 allows a 10% slower runtime if the hardware uses fewer resources
+        
+        Returns:
+            The optimal hardware configuration, accounting for resource efficiency within the tolerance.
+        """
+        assert (tolerance_ratio is None) or (tolerance_ratio >= 0), "tolerance_ratio must be a float greater than 0 or None."
+
+        # get information on the hardware that has the fastest runtime
+        fastest_hardware = min(avg_hardware_runtimes, key=avg_hardware_runtimes.get)
+        # if requestion no tolerance effects, just use the fastest hardware
+        if tolerance_ratio is None:
+            return fastest_hardware
+        
+        fastest_runtime = avg_hardware_runtimes[fastest_hardware]
+        base_cpu_count, base_memory_gb = Hardware.spec_from_hardware(fastest_hardware)
+
+        best_hardware = fastest_hardware
+        tolerance_limit = (1 + tolerance_ratio) * fastest_runtime
+        max_resource_decrease = 0
+        # potentially update the best hardware if a new one is fast enough with fewer resources
+        for hardware, runtime in avg_hardware_runtimes.items():
+            if runtime > tolerance_limit:
+                continue
+            cpu_count, memory_gb = Hardware.spec_from_hardware(hardware)
+            
+            # calculate proportional decreases in CPU and memory
+            cpu_decrease_ratio = (base_cpu_count - cpu_count) / base_cpu_count
+            memory_decrease_ratio = (base_memory_gb - memory_gb) / base_memory_gb
+            overall_resource_decrease = (cpu_decrease_ratio + memory_decrease_ratio) / 2
+            
+            # update best hardware if a larger average proportional decrease is found
+            if overall_resource_decrease > max_resource_decrease:
+                best_hardware = hardware
+        
+        return best_hardware
     
     @lru_cache(maxsize=None)
-    def get_best_hardwares() -> List[int]:
-        return [get_best_hardware(features, unique_hardware) for features in test_data[feature_cols].values]
+    def get_best_hardwares(tolerance_ratio: float | None = None) -> List[int]:
+        best_hardwares = []
+        for features in test_data[feature_cols].values:
+            hardware_avg_runtimes = get_hardware_avg_runtimes(features, unique_hardware)
+            best_hardware = get_best_hardware(hardware_avg_runtimes, tolerance_ratio)
+            best_hardwares.append(best_hardware)
+        return best_hardwares
     
     def get_model_accuracy(coefs: Dict[int, List[float]], bias: Dict[int, float], std: Dict[int, float]) -> float:
         """Get the accuracy of the model on the test data - how often does it predict the best hardware"""
         # use get_best_hardware to get the ground truth
-        truth = get_best_hardwares()
+        truth = get_best_hardwares(tolerance_ratio)
         # use the model to predict the best hardware
-        pred = [min(unique_hardware, key=lambda h: np.dot(coefs[h], features) + bias[h]) for features in test_data[feature_cols].values]
-        return np.mean([t == p for t, p in zip(truth, pred)])
+        predictions = []
+        for features in test_data[feature_cols].values:
+            predicted_runtimes = {h: np.dot(coefs[h], features) + bias[h] for h in unique_hardware}
+            predicted_hardware = get_best_hardware(predicted_runtimes, tolerance_ratio)
+            predictions.append(predicted_hardware)
+
+        return np.mean([t == p for t, p in zip(truth, predictions)])
         
     # Check that there are runtimes for all hardware/features
     for hardware, features in product(unique_hardware, unique_features):
@@ -240,12 +300,13 @@ def run_sim(n_rounds: int = 100,
 def run(n_sims: int, 
         n_rounds: int,
         feature_cols: List[str],
-        savedir: pathlib.Path):
+        savedir: pathlib.Path,
+        tolerance_ratio: float | None = None):
     dfs = []
     baseline_infos = []
     for i in range(n_sims):
         print(f"Running simulation {i+1}/{n_sims}", end="\r")
-        df, baseline_info = run_sim(n_rounds=n_rounds, feature_cols=feature_cols)
+        df, baseline_info = run_sim(n_rounds=n_rounds, tolerance_ratio=tolerance_ratio, feature_cols=feature_cols)
         baseline_info["sim"] = i
         df["sim"] = i
         dfs.append(df)
@@ -345,10 +406,14 @@ def run(n_sims: int,
 
 def main():
     n_sims = 10
-    n_rounds = 50
+    n_rounds = 100
+    # tolerance_ratio is a float >= 0 to represent the amount of slowdown allowed for a less resource intensive hardware
+    # when set to None, it selects the fastest hardware without reassessing in the case of a tie.
+    tolerance_ratio: float | None = 0.0
     
     run_sim(
         n_rounds=n_rounds,
+        tolerance_ratio=tolerance_ratio,
         feature_cols=["area"],
         savedir=results_dir / "area"
     )
@@ -357,19 +422,22 @@ def main():
         n_sims=n_sims,
         n_rounds=n_rounds,
         feature_cols=["area"],
-        savedir=results_dir / "area"
+        savedir=results_dir / "area",
+        tolerance_ratio=tolerance_ratio,
     )
     run(
         n_sims=n_sims,
         n_rounds=n_rounds,
         feature_cols=["wind_speed"],
-        savedir=results_dir / "wind_speed"
+        savedir=results_dir / "wind_speed",
+        tolerance_ratio=tolerance_ratio,
     )
     run(
         n_sims=n_sims,
         n_rounds=n_rounds,
         feature_cols=["area", "wind_speed", "wind_direction", "canopy_moisture", "surface_moisture"],
-        savedir=results_dir / "all"
+        savedir=results_dir / "all",
+        tolerance_ratio=tolerance_ratio,
     )
 
 
