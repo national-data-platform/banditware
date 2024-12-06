@@ -181,7 +181,7 @@ def run_sim(n_rounds: int = 100,
     
     def get_model_accuracy(coefs: Dict[int, List[float]], bias: Dict[int, float], std: Dict[int, float]) -> float:
         """Get the accuracy of the model on the test data - how often does it predict the best hardware"""
-        # use get_best_hardware to get the ground truth
+        # use get_best_hardware to get the ground truth for the test values
         truth = get_best_hardwares(tolerance_ratio)
         # use the model to predict the best hardware
         predictions = []
@@ -229,13 +229,13 @@ def run_sim(n_rounds: int = 100,
         std[hardware] = np.std(reg.predict(X) - y)
         # noise_coefs[hardware] = (reg.intercept_, np.std(reg.predict(X) - y))
 
-        # Calculate quality of the model on *all* the data
-        # Todo: change these to use full_data ^^ instead of train_data? but then y pred seems omniscient
-        X_all = train_data[feature_cols].values
-        y_all = train_data["runtime"].values
+        # Calculate quality of the model on test data
+        X_test = test_data[feature_cols].values
+        y_test = test_data["runtime"].values
+        # predicted runtimes
         y_pred = np.array([np.dot(coefs[h], x) + bias[h] 
-                           for h, x in zip(train_data["hardware"], X_all)])
-        rmse = np.sqrt(mean_squared_error(y_all, y_pred))
+                           for h, x in zip(test_data["hardware"], X_test)])
+        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
         acc = get_model_accuracy(coefs, bias, std)
 
         rows_runtime.append({
@@ -285,11 +285,11 @@ def run_sim(n_rounds: int = 100,
         fig.write_html(f"{savedir}/cb_{feature_cols[0]}.html")
         fig.write_image(f"{savedir}/cb_{feature_cols[0]}.png")
 
-    # compute rmse on full data (excluding test data)
-    X_all = train_data[feature_cols].values
-    y_all = train_data["runtime"].values
-    y_pred = np.array([np.dot(coef_truth[h], x) + bias_truth[h] for h, x in zip(train_data["hardware"], X_all)])
-    rmse = np.sqrt(mean_squared_error(y_all, y_pred))
+    # compute rmse on testing data
+    X_test = test_data[feature_cols].values
+    y_test = test_data["runtime"].values
+    y_pred = np.array([np.dot(coef_truth[h], x) + bias_truth[h] for h, x in zip(test_data["hardware"], X_test)])
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
 
     # compute accuracy on full data (excluding test data)
     acc = get_model_accuracy(coef_truth, bias_truth, std_truth)
@@ -430,20 +430,20 @@ def main():
         savedir=results_dir / "area",
         tolerance_ratio=tolerance_ratio,
     )
-    run(
-        n_sims=n_sims,
-        n_rounds=n_rounds,
-        feature_cols=["wind_speed"],
-        savedir=results_dir / "wind_speed",
-        tolerance_ratio=tolerance_ratio,
-    )
-    run(
-        n_sims=n_sims,
-        n_rounds=n_rounds,
-        feature_cols=["area", "wind_speed", "wind_direction", "canopy_moisture", "surface_moisture"],
-        savedir=results_dir / "all",
-        tolerance_ratio=tolerance_ratio,
-    )
+    # run(
+    #     n_sims=n_sims,
+    #     n_rounds=n_rounds,
+    #     feature_cols=["wind_speed"],
+    #     savedir=results_dir / "wind_speed",
+    #     tolerance_ratio=tolerance_ratio,
+    # )
+    # run(
+    #     n_sims=n_sims,
+    #     n_rounds=n_rounds,
+    #     feature_cols=["area", "wind_speed", "wind_direction", "canopy_moisture", "surface_moisture"],
+    #     savedir=results_dir / "all",
+    #     tolerance_ratio=tolerance_ratio,
+    # )
 
 
 
