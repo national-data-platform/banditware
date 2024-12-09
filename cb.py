@@ -64,9 +64,9 @@ def load_data(*feature_cols: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
         train_datas.append(train_data)
         test_datas.append(test_data)
     
-    train_data = pd.concat(train_datas)
-    test_data = pd.concat(test_datas)
-    
+    # shuffle the dataframes to make sure all future accesses are random
+    train_data = pd.concat(train_datas).sample(frac=1, replace=False)
+    test_data = pd.concat(test_datas).sample(frac=1, replace=False)
 
     return train_data, test_data
 
@@ -99,10 +99,9 @@ def run_sim(n_rounds: int = 100,
             std_truth.append(np.std(reg.predict(X) - y))
         return coef_truth, bias_truth, std_truth
 
-    def get_runtimes(features: np.ndarray, hardware: int, from_test=False) -> np.ndarray:
+    def get_runtimes(features: np.ndarray, hardware: int, df:pd.DataFrame = train_data) -> np.ndarray:
         """Get the runtime of a workflow on a specific hardware"""
         # get the runtimes from either the test or the train data
-        df = test_data if from_test else train_data
         filtered_data = df[
             (df["hardware"] == hardware) &
             np.logical_and.reduce([df[col] == feature for col, feature in zip(feature_cols, features)])
@@ -110,20 +109,13 @@ def run_sim(n_rounds: int = 100,
 
         return filtered_data["runtime"].values
 
-    def sample_runtime(features: np.ndarray, hardware: int, from_test: bool = False) -> float:
-        """Sample the runtime of a workflow on a specific hardware"""
-        runtimes = get_runtimes(features, hardware, from_test=from_test)
-        return np.random.choice(runtimes)
+    def sample_runtime(features: np.ndarray, hardware: int, df: pd.DataFrame) -> float:
+        """Sample the runtime of a workflow on a specific hardware."""
+        runtimes = get_runtimes(features, hardware, df)
+        return random.choice(runtimes)
 
-    # def get_best_hardware(features: np.ndarray, hardware: List[int]) -> int:
-    #     # coef_truth, bias_truth, std_truth = get_truth()
-    #     # return min(hardware, key=lambda h: np.dot(coef_truth[h], features) + bias_truth[h])
-
-    #     # get hardware with lowest average runtime for the given features
-    #     return min(hardware, key=lambda h: np.mean(get_runtimes(features, h)))
-
-    def get_hardware_avg_runtimes(features:np.ndarray, hardware:List[int], from_test=False) -> Dict[int, float]:
-        avg_hardware_runtimes = {h: np.mean(get_runtimes(features, h, from_test=from_test))
+    def get_hardware_avg_runtimes(features:np.ndarray, hardware:List[int], df:pd.DataFrame=train_data) -> Dict[int, float]:
+        avg_hardware_runtimes = {h: np.mean(get_runtimes(features, h, df))
                                 for h in hardware}
         return avg_hardware_runtimes
 
@@ -174,7 +166,7 @@ def run_sim(n_rounds: int = 100,
     def get_best_hardwares(tolerance_ratio: float | None = None) -> List[int]:
         best_hardwares = []
         for features in test_data[feature_cols].values:
-            hardware_avg_runtimes = get_hardware_avg_runtimes(features, unique_hardware, from_test=True)
+            hardware_avg_runtimes = get_hardware_avg_runtimes(features, unique_hardware, df=test_data)
             best_hardware = get_best_hardware(hardware_avg_runtimes, tolerance_ratio)
             best_hardwares.append(best_hardware)
         return best_hardwares
@@ -191,10 +183,19 @@ def run_sim(n_rounds: int = 100,
             predictions.append(predicted_hardware)
 
         return np.mean([t == p for t, p in zip(truth, predictions)])
+    
+    def select_features_and_hardware(
+            unexplored_feature_hardware_pairs: List[Tuple[np.ndarray, int]]) -> Tuple[np.ndarray, int]:
+        assert len(unexplored_feature_hardware_pairs) > 0, "Nothing to choose from - list is empty"
         
-    # Check that there are runtimes for all hardware/features
+        rand_index = random.randint(0, len(unexplored_feature_hardware_pairs)-1)
+        # get a random choice from the unexplored (feature,hardware) pairs
+        features, hardware = unexplored_feature_hardware_pairs.pop(rand_index)
+        return features, hardware
+        
+    # Check that there are runtimes for all hardware/features in the training data
     for hardware, features in product(unique_hardware, unique_features):
-        runtimes = get_runtimes(features, hardware)
+        runtimes = get_runtimes(features, hardware, train_data)
         assert(len(runtimes) > 0)
 
     samples: Dict[int, List[Tuple[List[float], float]]] = {i: [] for i in unique_hardware}
@@ -205,18 +206,25 @@ def run_sim(n_rounds: int = 100,
     rows_runtime = []
     e = e_start
     
-    # iterate through unique_features in a random order
-    for i in range(n_rounds):
-        features = random.choice(unique_features)
-        if np.random.rand() < e:
-            # Randomly select a hardware
-            hardware = np.random.choice(unique_hardware)
-        else:
-            # Select the hardware with the best estimated runtime
-            hardware = min(unique_hardware, key=lambda h: np.dot(coefs[h], features) + bias[h])
+    unexplored_feature_hardware_pairs = list(product(unique_features, unique_hardware))
 
-        # Sample the runtime of the workflow on the selected hardware
-        runtime = sample_runtime(features, hardware)
+    
+    # random_feature_choices = rand_feature_choices()
+    for i in range(n_rounds):
+        if len(unexplored_feature_hardware_pairs) > 0:
+            # coverage phase: make sure each combination gets explored at least once
+            features, hardware = select_features_and_hardware(unexplored_feature_hardware_pairs) 
+        else:
+            # bandit phase: run the bandit algorithm as normal
+            features = random.choice(unique_features)
+            if np.random.rand() >= e:
+                hardware = min(unique_hardware, key=lambda h: np.dot(coefs[h], features) + bias[h])
+            else:
+                hardware = random.choice(unique_hardware)
+            
+        # Sample the runtime of the workflow on the selected features and hardware
+        runtime = sample_runtime(features, hardware, df=train_data)
+        # print(f"features:\n{features}\nhardware: {hardware}\nruntime: {runtime}")
         samples[hardware].append((features, runtime)) 
 
         # Update the coefficients
@@ -414,7 +422,7 @@ def main():
     n_rounds = 100
     # tolerance_ratio is a float >= 0 to represent the amount of slowdown allowed for a less resource intensive hardware
     # when set to None, it selects the fastest hardware without reassessing in the case of a tie.
-    tolerance_ratio: float | None = None
+    tolerance_ratio: float | None = 0.05
     
     run_sim(
         n_rounds=n_rounds,
@@ -430,20 +438,20 @@ def main():
         savedir=results_dir / "area",
         tolerance_ratio=tolerance_ratio,
     )
-    # run(
-    #     n_sims=n_sims,
-    #     n_rounds=n_rounds,
-    #     feature_cols=["wind_speed"],
-    #     savedir=results_dir / "wind_speed",
-    #     tolerance_ratio=tolerance_ratio,
-    # )
-    # run(
-    #     n_sims=n_sims,
-    #     n_rounds=n_rounds,
-    #     feature_cols=["area", "wind_speed", "wind_direction", "canopy_moisture", "surface_moisture"],
-    #     savedir=results_dir / "all",
-    #     tolerance_ratio=tolerance_ratio,
-    # )
+    run(
+        n_sims=n_sims,
+        n_rounds=n_rounds,
+        feature_cols=["wind_speed"],
+        savedir=results_dir / "wind_speed",
+        tolerance_ratio=tolerance_ratio,
+    )
+    run(
+        n_sims=n_sims,
+        n_rounds=n_rounds,
+        feature_cols=["area", "wind_speed", "wind_direction", "canopy_moisture", "surface_moisture"],
+        savedir=results_dir / "all",
+        tolerance_ratio=tolerance_ratio,
+    )
 
 
 
