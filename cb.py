@@ -406,7 +406,9 @@ def run(n_sims: int,
     fig.write_image(f"{savedir}/accuracy.png")
 
 
+    checkpoint_rounds = [10, 100, n_rounds] if n_rounds > 100 else [10, n_rounds]
     # get average and std rmse at last round
+    print("\n\nRMSE Stats:")
     for r in [10, n_rounds]:
         last_round_rmse = df_sim[df_sim["round"] == r - 1]
         avg_rmse = last_round_rmse["rmse"].mean()
@@ -416,6 +418,20 @@ def run(n_sims: int,
         # Print how many % better the full fit is compared to the last round
         improvement = 100 * (1 - rmse_full / avg_rmse)
         print(f"Full fit is {improvement:.2f}% better than the fit in round {r}")
+    print("\n\nAccuracy Stats:")
+    print(f"Full fit accuracy: {acc_full:.2f}")
+    # print(f"Full fit accuracy: {avg_acc_full:.2f} ± {std_acc_full}")
+    for r in checkpoint_rounds:
+        last_round_acc = df_sim[df_sim["round"] == r - 1]
+        avg_acc = last_round_acc["accuracy"].mean()
+        std_acc = last_round_acc["accuracy"].std()
+        print(
+            f"Average Accuracy at round {r}: {avg_acc:.2f} ± {std_acc:.2f}")
+
+        # Print how many % better the full fit accuracy is compared to the last round
+        improvement = 100 * ((acc_full / avg_acc) - 1)
+        print(f"Full fit is {improvement:.2f}% better than the fit in round {r}")
+    print("\n")
 
 def main():
     n_sims = 10
