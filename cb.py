@@ -72,6 +72,7 @@ def load_data(*feature_cols: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
 def run_sim(n_rounds: int = 100,
             tolerance_ratio: float | None = None,
+            tolerance_seconds: int = 0,
             e_start: float = 1,
             e_decay: float = 0.99,
             e_min: float = 0.0,
@@ -119,7 +120,7 @@ def run_sim(n_rounds: int = 100,
                                 for h in hardware}
         return avg_hardware_runtimes
 
-    def get_best_hardware(avg_hardware_runtimes: Dict[int,float], tolerance_ratio: float | None) -> int:
+    def get_best_hardware(avg_hardware_runtimes: Dict[int,float], tolerance_ratio: float | None, tolerance_seconds: int = 0) -> int:
         """
         Determines the best hardware within an acceptable runtime tolerance, preferring options with fewer resources. If tolerance_ratio is 0, only updates best_hardware in case of a tie for runtimes. If tolerace_ratio is None, returns the fastest hardware without updating
 
@@ -132,18 +133,23 @@ def run_sim(n_rounds: int = 100,
             The optimal hardware configuration, accounting for resource efficiency within the tolerance.
         """
         assert (tolerance_ratio is None) or (tolerance_ratio >= 0), "tolerance_ratio must be a float greater than 0 or None."
+        assert tolerance_seconds >= 0, "tolerance seconds must be non-negative"
 
         # get information on the hardware that has the fastest runtime
         fastest_hardware = min(avg_hardware_runtimes, key=avg_hardware_runtimes.get)
         # if requestion no tolerance effects, just use the fastest hardware
         if tolerance_ratio is None:
-            return fastest_hardware
+            if tolerance_seconds == 0:
+                return fastest_hardware
+            # if tolerance seconds is specified without ratio, set ratio to 0.
+            tolerance_ratio = 0
         
         fastest_runtime = avg_hardware_runtimes[fastest_hardware]
         base_cpu_count, base_memory_gb = Hardware.spec_from_hardware(fastest_hardware)
 
         best_hardware = fastest_hardware
         tolerance_limit = (1 + tolerance_ratio) * fastest_runtime
+        tolerance_limit = max(tolerance_limit, fastest_runtime + tolerance_seconds)
         max_resource_decrease = 0
         # potentially update the best hardware if a new one is fast enough with fewer resources
         for hardware, runtime in avg_hardware_runtimes.items():
@@ -163,11 +169,11 @@ def run_sim(n_rounds: int = 100,
         return best_hardware
     
     @lru_cache(maxsize=None)
-    def get_best_hardwares(tolerance_ratio: float | None = None) -> List[int]:
+    def get_best_hardwares(tolerance_ratio: float | None = None, tolerance_seconds: int = 0) -> List[int]:
         best_hardwares = []
         for features in test_data[feature_cols].values:
             hardware_avg_runtimes = get_hardware_avg_runtimes(features, unique_hardware, df=test_data)
-            best_hardware = get_best_hardware(hardware_avg_runtimes, tolerance_ratio)
+            best_hardware = get_best_hardware(hardware_avg_runtimes, tolerance_ratio, tolerance_seconds)
             best_hardwares.append(best_hardware)
         return best_hardwares
     
@@ -314,12 +320,13 @@ def run(n_sims: int,
         n_rounds: int,
         feature_cols: List[str],
         savedir: pathlib.Path,
-        tolerance_ratio: float | None = None):
+        tolerance_ratio: float | None = None,
+        tolerance_seconds: int = 0):
     dfs = []
     baseline_infos = []
     for i in range(n_sims):
         print(f"Running simulation {i+1}/{n_sims}", end="\r")
-        df, baseline_info = run_sim(n_rounds=n_rounds, tolerance_ratio=tolerance_ratio, feature_cols=feature_cols)
+        df, baseline_info = run_sim(n_rounds=n_rounds, tolerance_ratio=tolerance_ratio, feature_cols=feature_cols, tolerance_seconds=tolerance_seconds)
         baseline_info["sim"] = i
         df["sim"] = i
         dfs.append(df)
@@ -439,10 +446,13 @@ def main():
     # tolerance_ratio is a float >= 0 to represent the amount of slowdown allowed for a less resource intensive hardware
     # when set to None, it selects the fastest hardware without reassessing in the case of a tie.
     tolerance_ratio: float | None = 0.05
+    # tolerance seconds represents how many seconds of slowdown is acceptable for a less resource intensive hardware
+    tolerance_seconds: int = 20
     
     run_sim(
         n_rounds=n_rounds,
         tolerance_ratio=tolerance_ratio,
+        tolerance_seconds=tolerance_seconds,
         feature_cols=["area"],
         savedir=results_dir / "area"
     )
@@ -453,20 +463,23 @@ def main():
         feature_cols=["area"],
         savedir=results_dir / "area",
         tolerance_ratio=tolerance_ratio,
+        tolerance_seconds=tolerance_seconds
     )
-    run(
-        n_sims=n_sims,
-        n_rounds=n_rounds,
-        feature_cols=["wind_speed"],
-        savedir=results_dir / "wind_speed",
-        tolerance_ratio=tolerance_ratio,
-    )
+    # run(
+    #     n_sims=n_sims,
+    #     n_rounds=n_rounds,
+    #     feature_cols=["wind_speed"],
+    #     savedir=results_dir / "wind_speed",
+    #     tolerance_ratio=tolerance_ratio,
+    #     tolerance_seconds=tolerance_seconds
+    # )
     run(
         n_sims=n_sims,
         n_rounds=n_rounds,
         feature_cols=["area", "wind_speed", "wind_direction", "canopy_moisture", "surface_moisture"],
         savedir=results_dir / "all",
         tolerance_ratio=tolerance_ratio,
+        tolerance_seconds=tolerance_seconds
     )
 
 
