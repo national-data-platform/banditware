@@ -1,29 +1,32 @@
 from functools import lru_cache, wraps
 from itertools import product
 import random
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 import numpy as np
 import pandas as pd
 import pathlib
+import argparse
 import plotly.express as px
 
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error  # for RMSE calculation
 
+from hardware_manager import HardwareManager
+
 
 this_dir = pathlib.Path(__file__).parent.absolute()
-results_dir = this_dir / "results"
 
 ALL_FEATURE_COLS = [
-    "canopy_moisture",
+    "num_tasks",
+    # "canopy_moisture",
     # "run_max_mem_rss_bytes",
     # "sim_time",
-    "surface_moisture",
+    # "surface_moisture",
     # "threads",
-    "wind_direction",
-    "wind_speed",
+    # "wind_direction",
+    # "wind_speed",
     # "run_uuid",
-    "area",
+    # "area",
     # "runtime",
     # "cpu_usage_total",
     # "mem_usage_total",
@@ -41,6 +44,9 @@ def load_data(*feature_cols: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
     feature_cols = list(feature_cols)
     _data = pd.read_csv(f"{this_dir}/results/data/data.csv")
 
+    # Replace the hardware name with an integer identifier in hardware manager
+    _data["hardware"] = _data["hardware"].apply(lambda x: int(HardwareManager.get_hardware_idx(x)))
+
     unique_features = _data[feature_cols].drop_duplicates().values
     unique_hardware = sorted(_data["hardware"].unique())
 
@@ -50,34 +56,37 @@ def load_data(*feature_cols: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
     
     # reserve 20% of the data for testing
     # must make sure that training data contains all feature/hardware combinations
-    datas = []
+    train_datas = []
     test_datas = []
     for features, hardware in product(unique_features, unique_hardware):
-        data: pd.DataFrame = _data[
+        full_data: pd.DataFrame = _data[
             (np.logical_and.reduce([_data[col] == feature for col, feature in zip(feature_cols, features)])) &
             (_data["hardware"] == hardware)
         ]
-        test_data = data.sample(frac=0.2)
-        data = data.drop(test_data.index)
-        datas.append(data)
+    	# Replace the hardware name with an integer identifier in hardware manager
+        test_data = full_data.sample(frac=0.2)
+        train_data = full_data.drop(test_data.index)
+        train_datas.append(train_data)
         test_datas.append(test_data)
     
-    data = pd.concat(datas)
-    test_data = pd.concat(test_datas)
-    
+    # shuffle the dataframes to make sure all future accesses are random
+    train_data = pd.concat(train_datas).sample(frac=1, replace=False)
+    test_data = pd.concat(test_datas).sample(frac=1, replace=False)
 
-    return data, test_data
+    return train_data, test_data
 
 def run_sim(n_rounds: int = 100,
+            tolerance_ratio: Union[float, None] = None,
+            tolerance_seconds: int = 0,
             e_start: float = 1,
             e_decay: float = 0.99,
             e_min: float = 0.0,
             feature_cols: List[str] = ["area"],
             savedir: pathlib.Path = None) -> pd.DataFrame:
     """Run a single simulation of the contextual bandit algorithm"""        
-    data, test_data = load_data(*feature_cols)
-    unique_features = data[feature_cols].drop_duplicates().values
-    unique_hardware = sorted(data["hardware"].unique())
+    train_data, test_data = load_data(*feature_cols)
+    unique_features = train_data[feature_cols].drop_duplicates().values
+    unique_hardware = sorted(train_data["hardware"].unique())
 
     @lru_cache(maxsize=None)
     def get_truth() -> Tuple[List[np.ndarray], List[float], List[float]]:
@@ -86,51 +95,122 @@ def run_sim(n_rounds: int = 100,
         std_truth = []
         coef_truth = []
         for hardware in unique_hardware:
-            _data = data[data["hardware"] == hardware]
+            _data = train_data[train_data["hardware"] == hardware]
             X = _data[feature_cols].values
             y = _data["runtime"].values
             reg = LinearRegression().fit(X, y)
             coef_truth.append(reg.coef_)
             bias_truth.append(reg.intercept_)
-            std_truth.append(np.std(reg.predict(X) - y))
+            std_truth.append(np.std(reg.predict(X) - y))    
         return coef_truth, bias_truth, std_truth
 
-    def get_runtimes(features: np.ndarray, hardware: int) -> np.ndarray:
+    def get_runtimes(features: np.ndarray, hardware: int, df:pd.DataFrame = train_data) -> np.ndarray:
         """Get the runtime of a workflow on a specific hardware"""
-        filtered_data = data[
-            (data["hardware"] == hardware) &
-            np.logical_and.reduce([data[col] == feature for col, feature in zip(feature_cols, features)])
+        # get the runtimes from either the test or the train data
+        filtered_data = df[
+            (df["hardware"] == hardware) &
+            np.logical_and.reduce([df[col] == feature for col, feature in zip(feature_cols, features)])
         ]
 
         return filtered_data["runtime"].values
 
-    def sample_runtime(features: np.ndarray, hardware: int) -> float:
-        """Sample the runtime of a workflow on a specific hardware"""
-        runtimes = get_runtimes(features, hardware)
-        return np.random.choice(runtimes)
+    def sample_runtime(features: np.ndarray, hardware: int, df: pd.DataFrame) -> float:
+        """Sample the runtime of a workflow on a specific hardware."""
+        runtimes = get_runtimes(features, hardware, df)
+        return random.choice(runtimes)
 
-    def get_best_hardware(features: np.ndarray, hardware: List[int]) -> int:
-        # coef_truth, bias_truth, std_truth = get_truth()
-        # return min(hardware, key=lambda h: np.dot(coef_truth[h], features) + bias_truth[h])
+    def get_hardware_avg_runtimes(features:np.ndarray, hardware:List[int], df:pd.DataFrame=train_data) -> Dict[int, float]:
+        avg_hardware_runtimes = {h: np.mean(get_runtimes(features, h, df))
+                                for h in hardware}
+        return avg_hardware_runtimes
 
-        # get hardware with lowest average runtime for the given features
-        return min(hardware, key=lambda h: np.mean(get_runtimes(features, h)))
+    def get_best_hardware(avg_hardware_runtimes: Dict[int,float], tolerance_ratio: Union[float, None], tolerance_seconds: int = 0) -> int:
+        """
+        Determines the best hardware within an acceptable runtime tolerance, preferring options with fewer resources. 
+        If tolerance_ratio is 0, only updates best_hardware in case of a tie for runtimes.
+        If tolerace_ratio is None, returns the fastest hardware without updating
+
+        Parameters:
+            avg_hardware_runtimes: Dictionary of hardware configurations mapped to their average runtimes.
+            tolerance_ratio: Fraction of acceptable runtime increase for choosing hardware with fewer resources. 
+                Ex: tolerance_ratio=0.1 allows a 10% slower runtime if the hardware uses fewer resources
+        
+        Returns:
+            The optimal hardware configuration, accounting for resource efficiency within the tolerance.
+        """
+        assert (tolerance_ratio is None) or (tolerance_ratio >= 0), "tolerance_ratio must be a float greater than 0 or None."
+        assert tolerance_seconds >= 0, "tolerance seconds must be non-negative"
+
+        # get information on the hardware that has the fastest runtime
+        fastest_hardware = min(avg_hardware_runtimes, key=avg_hardware_runtimes.get)
+        # if requestion no tolerance effects, just use the fastest hardware
+        if tolerance_ratio is None:
+            if tolerance_seconds == 0:
+                return fastest_hardware
+            # if tolerance seconds is specified without ratio, set ratio to 0.
+            tolerance_ratio = 0
+        
+        fastest_runtime = avg_hardware_runtimes[fastest_hardware]
+        base_cpu_count, base_memory_gb = HardwareManager.spec_from_hardware(HardwareManager.get_hardware(fastest_hardware))
+
+        best_hardware = fastest_hardware
+        tolerance_limit = (1 + tolerance_ratio) * fastest_runtime
+        tolerance_limit = max(tolerance_limit, fastest_runtime + tolerance_seconds)
+        max_resource_decrease = 0
+        
+        # potentially update the best hardware if a new one is fast enough with fewer resources
+        for hardware, runtime in avg_hardware_runtimes.items():
+            if runtime > tolerance_limit:
+                continue
+            
+            cpu_count, memory_gb = HardwareManager.spec_from_hardware(HardwareManager.get_hardware(hardware))
+            
+            # calculate proportional decreases in CPU and memory
+            cpu_decrease_ratio = (base_cpu_count - cpu_count) / base_cpu_count
+            memory_decrease_ratio = (base_memory_gb - memory_gb) / base_memory_gb
+            overall_resource_decrease = (cpu_decrease_ratio + memory_decrease_ratio) / 2
+            
+            # update best hardware if a larger average proportional decrease is found
+            if overall_resource_decrease > max_resource_decrease:
+                best_hardware = hardware
+        
+        return best_hardware
     
     @lru_cache(maxsize=None)
-    def get_best_hardwares() -> List[int]:
-        return [get_best_hardware(features, unique_hardware) for features in test_data[feature_cols].values]
+    def get_best_hardwares(tolerance_ratio: Union[float, None] = None, tolerance_seconds: int = 0) -> List[int]:
+        best_hardwares = []
+        for features in test_data[feature_cols].values:
+            hardware_avg_runtimes = get_hardware_avg_runtimes(features, unique_hardware, df=test_data)
+            best_hardware = get_best_hardware(hardware_avg_runtimes, tolerance_ratio, tolerance_seconds)
+            best_hardwares.append(best_hardware)
+        return best_hardwares
     
     def get_model_accuracy(coefs: Dict[int, List[float]], bias: Dict[int, float], std: Dict[int, float]) -> float:
         """Get the accuracy of the model on the test data - how often does it predict the best hardware"""
-        # use get_best_hardware to get the ground truth
-        truth = get_best_hardwares()
+        # use get_best_hardware to get the ground truth for the test values
+        truth = get_best_hardwares(tolerance_ratio)
         # use the model to predict the best hardware
-        pred = [min(unique_hardware, key=lambda h: np.dot(coefs[h], features) + bias[h]) for features in test_data[feature_cols].values]
-        return np.mean([t == p for t, p in zip(truth, pred)])
+        predictions = []
+
+        for features in test_data[feature_cols].values:
+            predicted_runtimes = {h: np.dot(coefs[h], features) + bias[h] for h in unique_hardware}
+            predicted_hardware = get_best_hardware(predicted_runtimes, tolerance_ratio)
+            predictions.append(predicted_hardware)
+
+        return np.mean([t == p for t, p in zip(truth, predictions)])
+    
+    def select_features_and_hardware(
+            unexplored_feature_hardware_pairs: List[Tuple[np.ndarray, int]]) -> Tuple[np.ndarray, int]:
+        assert len(unexplored_feature_hardware_pairs) > 0, "Nothing to choose from - list is empty"
         
-    # Check that there are runtimes for all hardware/features
+        rand_index = random.randint(0, len(unexplored_feature_hardware_pairs)-1)
+        # get a random choice from the unexplored (feature,hardware) pairs
+        features, hardware = unexplored_feature_hardware_pairs.pop(rand_index)
+        return features, hardware
+        
+    # Check that there are runtimes for all hardware/features in the training data
     for hardware, features in product(unique_hardware, unique_features):
-        runtimes = get_runtimes(features, hardware)
+        runtimes = get_runtimes(features, hardware, train_data)
         assert(len(runtimes) > 0)
 
     samples: Dict[int, List[Tuple[List[float], float]]] = {i: [] for i in unique_hardware}
@@ -141,18 +221,25 @@ def run_sim(n_rounds: int = 100,
     rows_runtime = []
     e = e_start
     
-    # iterate through unique_features in a random order
-    for i in range(n_rounds):
-        features = random.choice(unique_features)
-        if np.random.rand() < e:
-            # Randomly select a hardware
-            hardware = np.random.choice(unique_hardware)
-        else:
-            # Select the hardware with the best estimated runtime
-            hardware = min(unique_hardware, key=lambda h: np.dot(coefs[h], features) + bias[h])
+    unexplored_feature_hardware_pairs = list(product(unique_features, unique_hardware))
 
-        # Sample the runtime of the workflow on the selected hardware
-        runtime = sample_runtime(features, hardware)
+    
+    # random_feature_choices = rand_feature_choices()
+    for i in range(n_rounds):
+        if len(unexplored_feature_hardware_pairs) > 0:
+            # coverage phase: make sure each combination gets explored at least once
+            features, hardware = select_features_and_hardware(unexplored_feature_hardware_pairs) 
+        else:
+            # bandit phase: run the bandit algorithm as normal
+            features = random.choice(unique_features)
+            if np.random.rand() >= e:
+                hardware = min(unique_hardware, key=lambda h: np.dot(coefs[h], features) + bias[h])
+            else:
+                hardware = random.choice(unique_hardware)
+            
+        # Sample the runtime of the workflow on the selected features and hardware
+        runtime = sample_runtime(features, hardware, df=train_data)
+        # print(f"features:\n{features}\nhardware: {hardware}\nruntime: {runtime}")
         samples[hardware].append((features, runtime)) 
 
         # Update the coefficients
@@ -165,12 +252,14 @@ def run_sim(n_rounds: int = 100,
         std[hardware] = np.std(reg.predict(X) - y)
         # noise_coefs[hardware] = (reg.intercept_, np.std(reg.predict(X) - y))
 
-        # Calculate quality of the model on *all* the data
-        X_all = data[feature_cols].values
-        y_all = data["runtime"].values
-        y_pred = np.array([np.dot(coefs[h], x) + bias[h] for h, x in zip(data["hardware"], X_all)])
+        # Calculate quality of the model on test data
+        X_test = test_data[feature_cols].values
+        y_test = test_data["runtime"].values
+        # predicted runtimes
+        y_pred = np.array([np.dot(coefs[h], x) + bias[h] 
+                           for h, x in zip(test_data["hardware"], X_test)])
+        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
         
-        rmse = np.sqrt(mean_squared_error(y_all, y_pred))
         acc = get_model_accuracy(coefs, bias, std)
 
         rows_runtime.append({
@@ -190,7 +279,7 @@ def run_sim(n_rounds: int = 100,
         feature_col = feature_cols[0]
         rows = []
         for hardware_idx in unique_hardware:
-            for x in np.linspace(data[feature_col].min(), data[feature_col].max(), 10):
+            for x in np.linspace(train_data[feature_col].min(), train_data[feature_col].max(), 10):
                 rows.append({
                     "x": x,
                     "y": coefs[hardware_idx][0] * x + bias[hardware_idx],
@@ -220,11 +309,16 @@ def run_sim(n_rounds: int = 100,
         fig.write_html(f"{savedir}/cb_{feature_cols[0]}.html")
         fig.write_image(f"{savedir}/cb_{feature_cols[0]}.png")
 
-    # compute rmse on full data (excluding test data)
-    X_all = data[feature_cols].values
-    y_all = data["runtime"].values
-    y_pred = np.array([np.dot(coef_truth[h], x) + bias_truth[h] for h, x in zip(data["hardware"], X_all)])
-    rmse = np.sqrt(mean_squared_error(y_all, y_pred))
+
+    
+
+
+
+    # compute rmse on testing data
+    X_test = test_data[feature_cols].values
+    y_test = test_data["runtime"].values
+    y_pred = np.array([np.dot(coef_truth[h], x) + bias_truth[h] for h, x in zip(test_data["hardware"], X_test)])
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
 
     # compute accuracy on full data (excluding test data)
     acc = get_model_accuracy(coef_truth, bias_truth, std_truth)
@@ -240,12 +334,14 @@ def run_sim(n_rounds: int = 100,
 def run(n_sims: int, 
         n_rounds: int,
         feature_cols: List[str],
-        savedir: pathlib.Path):
+        savedir: pathlib.Path,
+        tolerance_ratio: Union[float, None] = None,
+        tolerance_seconds: int = 0):
     dfs = []
     baseline_infos = []
     for i in range(n_sims):
         print(f"Running simulation {i+1}/{n_sims}", end="\r")
-        df, baseline_info = run_sim(n_rounds=n_rounds, feature_cols=feature_cols)
+        df, baseline_info = run_sim(n_rounds=n_rounds, tolerance_ratio=tolerance_ratio, feature_cols=feature_cols, tolerance_seconds=tolerance_seconds)
         baseline_info["sim"] = i
         df["sim"] = i
         dfs.append(df)
@@ -273,9 +369,8 @@ def run(n_sims: int,
     )
     print(f"Full fit RMSE: {rmse_full:.2f}")
 
-    savedir.mkdir(parents=True, exist_ok=True)
-    fig.write_html(f"{savedir}/rmse.html")
-    fig.write_image(f"{savedir}/rmse.png")
+    fig.write_html(savedir.joinpath("rmse.html"))
+    fig.write_image(savedir.joinpath("rmse.png"))
 
 
     fig = px.line(
@@ -291,8 +386,8 @@ def run(n_sims: int,
     )
     # remove legend
     fig.for_each_trace(lambda t: t.update(showlegend=False))
-    fig.write_html(f"{savedir}/rmse_line.html")
-    fig.write_image(f"{savedir}/rmse_line.png")
+    fig.write_html(savedir.joinpath("rmse_line.html"))
+    fig.write_image(savedir.joinpath("rmse_line.png"))
 
 
     # get accuracy of full data
@@ -312,8 +407,8 @@ def run(n_sims: int,
         line_color="red",
         line_width=2,
     )
-    fig.write_html(f"{savedir}/accuracy_line.html")
-    fig.write_image(f"{savedir}/accuracy_line.png")
+    fig.write_html(savedir.joinpath("accuracy_line.html"))
+    fig.write_image(savedir.joinpath("accuracy_line.png"))
 
     # box
     fig = px.box(
@@ -328,11 +423,13 @@ def run(n_sims: int,
         line_color="red",
         line_width=2,
     )
-    fig.write_html(f"{savedir}/accuracy.html")
-    fig.write_image(f"{savedir}/accuracy.png")
+    fig.write_html(savedir.joinpath("accuracy.html"))
+    fig.write_image(savedir.joinpath("accuracy.png"))
 
 
+    checkpoint_rounds = [10, 100, n_rounds] if n_rounds > 100 else [10, n_rounds]
     # get average and std rmse at last round
+    print("\n\nRMSE Stats:")
     for r in [10, n_rounds]:
         last_round_rmse = df_sim[df_sim["round"] == r - 1]
         avg_rmse = last_round_rmse["rmse"].mean()
@@ -340,38 +437,89 @@ def run(n_sims: int,
         print(f"Average RMSE at round {r}: {avg_rmse:.2f} ± {std_rmse:.2f}")
 
         # Print how many % better the full fit is compared to the last round
-        improvement = 100 * (1 - avg_rmse / rmse_full)
+        improvement = 100 * (1 - rmse_full / avg_rmse)
         print(f"Full fit is {improvement:.2f}% better than the fit in round {r}")
+    print("\n\nAccuracy Stats:")
+    print(f"Full fit accuracy: {acc_full:.2f}")
+    # print(f"Full fit accuracy: {avg_acc_full:.2f} ± {std_acc_full}")
+    for r in checkpoint_rounds:
+        last_round_acc = df_sim[df_sim["round"] == r - 1]
+        avg_acc = last_round_acc["accuracy"].mean()
+        std_acc = last_round_acc["accuracy"].std()
+        print(
+            f"Average Accuracy at round {r}: {avg_acc:.2f} ± {std_acc:.2f}")
 
-def main():
-    n_sims = 10
-    n_rounds = 50
+        # Print how many % better the full fit accuracy is compared to the last round
+        improvement = 100 * ((acc_full / avg_acc) - 1)
+        print(f"Full fit is {improvement:.2f}% better than the fit in round {r}")
+    print("\n")
+
+
+def get_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run the contextual bandit algorithm")
+    parser.add_argument("--n_sims", type=int, default=10, help="Number of simulations to run")
+    parser.add_argument("--n_rounds", type=int, default=100, help="Number of rounds per simulation")
+    parser.add_argument("--savedir", type=str, help="Name of the savedir.")
+
     
+    return parser
+def main():
+
+    parser = get_parser()
+    args = parser.parse_args()
+    n_sims = args.n_sims
+    n_rounds = args.n_rounds
+    savedir = pathlib.Path(args.savedir).joinpath("results")
+    savedir.mkdir(parents=True, exist_ok=True)
+
+    # Initialize HardwareManager with the CSV file path
+    HardwareManager.init_manager(savedir.joinpath("data/data.csv"))
+
+
+    # tolerance_ratio is a float >= 0 to represent the amount of slowdown allowed for a less resource intensive hardware
+    # when set to None, it selects the fastest hardware without reassessing in the case of a tie.
+    tolerance_ratio: Union[float, None] = 0.05
+    feature_cols = ALL_FEATURE_COLS
+    feats = '_'.join(feature_cols)
+    results_dir = savedir.joinpath(feats)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    print(results_dir)
+
+    # tolerance seconds represents how many seconds of slowdown is acceptable for a less resource intensive hardware
+    tolerance_seconds: int = 20
+
+
     run_sim(
         n_rounds=n_rounds,
-        feature_cols=["area"],
-        savedir=results_dir / "area"
+        tolerance_ratio=tolerance_ratio,
+        tolerance_seconds=tolerance_seconds,
+        feature_cols=feature_cols,
+        savedir=results_dir
     )
 
     run(
         n_sims=n_sims,
         n_rounds=n_rounds,
-        feature_cols=["area"],
-        savedir=results_dir / "area"
+        feature_cols=feature_cols,
+        savedir=results_dir,
+        tolerance_ratio=tolerance_ratio,
+        tolerance_seconds=tolerance_seconds
     )
-    run(
-        n_sims=n_sims,
-        n_rounds=n_rounds,
-        feature_cols=["wind_speed"],
-        savedir=results_dir / "wind_speed"
-    )
-    run(
-        n_sims=n_sims,
-        n_rounds=n_rounds,
-        feature_cols=["area", "wind_speed", "wind_direction", "canopy_moisture", "surface_moisture"],
-        savedir=results_dir / "all"
-    )
-
+    # run(
+    #     n_sims=n_sims,
+    #     n_rounds=n_rounds,
+    #     feature_cols=["wind_speed"],
+    #     savedir=results_dir / "wind_speed",
+    #     tolerance_ratio=tolerance_ratio,
+    # )
+    # run(
+    #     n_sims=n_sims,
+    #     n_rounds=n_rounds,
+    #     feature_cols=["area", "wind_speed", "wind_direction", "canopy_moisture", "surface_moisture"],
+    #     savedir=results_dir / "all",
+    #     tolerance_ratio=tolerance_ratio,
+    #     tolerance_seconds=tolerance_seconds
+    # )
 
 
 

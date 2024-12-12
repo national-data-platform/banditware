@@ -23,6 +23,14 @@ class Hardware(enum.Enum):
                 return hardware
         raise ValueError(f"No matching hardware for {cpus} CPUs and {mem} MB memory.")
     
+    @classmethod
+    def spec_from_hardware(cls, hardware_number: int) -> tuple[int, int]:
+        # Given an int (between 0 and 4), return the (cpu, mem gb) tuple
+        for hardware in cls:
+            if hardware.value[1] == hardware_number:
+                return hardware.value[0]
+        raise ValueError(f"No hardware found for number {hardware_number}.")
+    
 def get_hardware(name: str) -> Hardware:
     """Get hardware values"""
     try:
@@ -127,7 +135,7 @@ def clean_data(data: pd.DataFrame) -> pd.DataFrame:
 def main():
     parser = get_parser()
     args = parser.parse_args()
-
+    
     dfs = traverse_data(pathlib.Path(args.base_path))
     # print(dfs)
 
