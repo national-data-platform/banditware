@@ -82,7 +82,8 @@ def run_sim(n_rounds: int = 100,
             e_decay: float = 0.99,
             e_min: float = 0.0,
             feature_cols: List[str] = ["area"],
-            savedir: pathlib.Path = None) -> pd.DataFrame:
+            savedir: pathlib.Path = None,
+            motivation: bool = False) -> pd.DataFrame:
     """Run a single simulation of the contextual bandit algorithm"""        
     train_data, test_data = load_data(*feature_cols)
     unique_features = train_data[feature_cols].drop_duplicates().values
@@ -305,13 +306,21 @@ def run_sim(n_rounds: int = 100,
             opacity=0.5,
             symbol="mode"
         )
-
+        
+        # Rename the axis 
+        fig.update_xaxes(title_text=feature_cols[0])
+        fig.update_yaxes(title_text="Runtime", matches="y")
+        
+        # Hide duplicate y-axis titles on other facets
+        for axis in fig.layout:
+            if axis.startswith("yaxis") and axis != "yaxis":
+                fig.layout[axis].title.text = ""
+        
         fig.write_html(f"{savedir}/cb_{feature_cols[0]}.html")
         fig.write_image(f"{savedir}/cb_{feature_cols[0]}.png")
 
-
-    
-
+        if motivation:
+            plot_motivation(df, feature_cols[0], savedir)
 
 
     # compute rmse on testing data
@@ -330,6 +339,58 @@ def run_sim(n_rounds: int = 100,
     }
 
     return pd.DataFrame(rows_runtime), baseline_info
+
+def plot_motivation(df: pd.DataFrame, feature_cols: str, savedir: pathlib.Path):
+    # Convert the Names of the hardwares 
+    # Mapping from integers to custom labels (H0, H1, H2, H3)
+    hardware_map = {
+        0: "H0",
+        1: "H1",
+        2: "H2",
+        3: "H3"
+    }
+    # Apply the mapping to the "Hardware" column
+    df["Hardware"] = df["Hardware"].map(hardware_map)
+    # Convert Hardware to a categorical type
+    df["Hardware"] = df["Hardware"].astype("category")
+
+    # Define custom color mapping for Hardware
+    color_map = {
+        "H0": "#FF6347",  # Tomato
+        "H1": "#4682B4",  # SteelBlue
+        "H2": "#32CD32",  # LimeGreen
+        "H3": "#FFD700",  # Gold
+    }
+    
+    fig2 = px.scatter(
+        df, 
+        x="x", 
+        y="y", 
+        color="Hardware",    # Color by Hardware
+        symbol="mode",       # Different symbols for actual and predicted
+        template="simple_white",
+        error_y="error",
+        opacity=0.8,
+        category_orders={"Hardware": df["Hardware"].unique().tolist()},
+        color_discrete_map=color_map
+    )
+
+    # Update marker size and add black borders
+    fig2.update_traces(marker=dict(
+        size=8,                     # Increase marker size (adjust as needed)
+        line=dict(
+            width=2,                 # Width of the border
+            color="black"            # Border color (black)
+        )
+    ))
+    
+    # Rename the axes
+    fig2.update_xaxes(title_text="Number of tasks")
+    fig2.update_yaxes(title_text="Makespan (s)")
+
+    # Save the figure
+    fig2.write_html(f"{savedir}/cb_motivation.html")
+    fig2.write_image(f"{savedir}/cb_motivation.png")
 
 def run(n_sims: int, 
         n_rounds: int,
@@ -460,6 +521,8 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n_sims", type=int, default=10, help="Number of simulations to run")
     parser.add_argument("--n_rounds", type=int, default=100, help="Number of rounds per simulation")
     parser.add_argument("--savedir", type=str, help="Name of the savedir.")
+    parser.add_argument("--motivation", type=bool, help="Flag to set the plot for the motivation use-case")
+
 
     
     return parser
@@ -471,7 +534,7 @@ def main():
     n_rounds = args.n_rounds
     savedir = pathlib.Path(args.savedir).joinpath("results")
     savedir.mkdir(parents=True, exist_ok=True)
-
+    motivation = args.motivation
     # Initialize HardwareManager with the CSV file path
     HardwareManager.init_manager(savedir.joinpath("data/data.csv"))
 
@@ -494,7 +557,8 @@ def main():
         tolerance_ratio=tolerance_ratio,
         tolerance_seconds=tolerance_seconds,
         feature_cols=feature_cols,
-        savedir=results_dir
+        savedir=results_dir,
+        motivation=motivation
     )
 
     run(
