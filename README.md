@@ -6,6 +6,6 @@ To run BanditWare:
 1. Choose a dataset you would like to use. Choose a path to a folder or csv file that holds various runs of an application.
     - For a folder, label subfolders as follows: `{n}cores_{m}gb`, where `n` is the number of cpu cores and `m` is the number of gigabytes of RAM that the application was run on. 
     - For a csv file, make sure the columns contain `runtime` and any feature columns of the application. If it is not placed in any subfolders, encode the number of cpu cores and gigabytes of RAM in a `hardware` column with values like "2_16" to represent 2 cpu cores and 16 GB of RAM.
-2. In the terminal, run `python3 preprocess.py --data_path={PATH_TO_DATA}`, where `PATH_TO_DATA` is the path from step 1.
+2. In the terminal, run `python3 preprocess.py --base_path={PATH_TO_DATA}`, where `PATH_TO_DATA` is the path from step 1.
 3. Finally, set the desired parameters for the contextual bandit in the `main()` function of `cb.py`, then run `python3 cb.py`.
 4. To see results and preprocessed data, look in the `results` folder that was generated.
