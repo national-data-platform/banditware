@@ -40,8 +40,10 @@ def get_hardware(name: str) -> Hardware:
 
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Pre-process data for the integrated performance framework")
-    parser.add_argument("--base_path", type=pathlib.Path, required=True, help="Path to the head folder where data is stored.")
-    
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--base_path", type=pathlib.Path, help="Path to the head folder where data is stored.")
+    group.add_argument("--data_file", type=pathlib.Path, help="Path to the data csv file.")
+
     return parser
 
 def traverse_data(base_path: pathlib.Path) -> pd.DataFrame:
@@ -126,11 +128,12 @@ def clean_data(data: pd.DataFrame) -> pd.DataFrame:
     # Remove unamed column
     data = data.loc[:, ~data.columns.str.contains('^Unnamed')]
     # replace NaN with 0    
-    data.fillna(0, inplace=True)
+    data = data.fillna(0)
 
     # have to do this for now
     shared_areas = [1053216.0, 1854216.0, 1369900.0, 828144.0, 2543220.0]
     data = data[data['area'].isin(shared_areas)]
+    data = data.reset_index(drop=True)
     
     return data
 
@@ -139,11 +142,12 @@ def main():
     parser = get_parser()
     args = parser.parse_args()
     
-    dfs = traverse_data(pathlib.Path(args.base_path))
-    # print(dfs)
-
-    full_df = identify_hardware(dfs)
-
+    full_df = None
+    if args.base_path:
+        dfs = traverse_data(pathlib.Path(args.base_path))
+        full_df = identify_hardware(dfs)
+    else:
+        full_df = pd.read_csv(args.data_file)
     full_df = clean_data(full_df)
 
 
