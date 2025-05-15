@@ -322,7 +322,7 @@ def run_sim(n_rounds: int = 100,
         
         fig.write_html(f"{savedir}/cb_{feature_cols[0]}.html")
         fig.write_image(f"{savedir}/cb_{feature_cols[0]}.png")
-        fig.write_image(f"./cb_{feature_cols[0]}.pdf")
+        fig.write_image(f"{savedir}/cb_{feature_cols[0]}.pdf")
 
         if motivation:
             plot_motivation(df, feature_cols[0], savedir)
@@ -427,7 +427,7 @@ def run(n_sims: int,
     info_df = df_sim.copy()
     info_df['avg_rmse_full'] = rmse_full
     info_df['avg_acc_full'] = acc_full
-    info_df.to_csv('bp3d_cb.csv')
+    # info_df.to_csv('bp3d_cb.csv')
 
     fig = px.box(
         df_sim, x="round", y="rmse",
@@ -552,7 +552,9 @@ def main():
     # tolerance_ratio is a float >= 0 to represent the amount of slowdown allowed for a less resource intensive hardware
     # when set to None, it selects the fastest hardware without reassessing in the case of a tie.
     # when set to 0, it selects the fastest hardware, preferring cheaper hardwares in the case of a tie.
-    tolerance_ratio: Union[float, None] = 0.05
+    tolerance_ratio: Union[float, None] = 0.0
+    # tolerance seconds represents how many seconds of slowdown is acceptable for a less resource intensive hardware
+    tolerance_seconds: int = 0
     # feature_cols = ALL_FEATURE_COLS
     feature_cols = ['area']
     feats = '_'.join(feature_cols)
@@ -560,8 +562,6 @@ def main():
     results_dir.mkdir(parents=True, exist_ok=True)
     print(results_dir)
 
-    # tolerance seconds represents how many seconds of slowdown is acceptable for a less resource intensive hardware
-    tolerance_seconds: int = 20
 
 
     run_sim(
