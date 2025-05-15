@@ -23,6 +23,7 @@ class HardwareManager:
             for _, row in df.iterrows():
                 hardware_value = row["hardware"]  # e.g., 8_20, 12_20, etc.
                 hardware_name = hardware_names[hardware_value]
+                # print(f"{hardware_value=}")
                 cpu_count = int(hardware_value.split("_")[0])  # Column for CPU count
                 memory_gb = float(hardware_value.split("_")[1])  # Column for memory in GB
 

@@ -10,6 +10,10 @@ import plotly.express as px
 
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error  # for RMSE calculation
+import plotly.io as pio
+# plotly has a bug where the first time a graph is saved as a pdf, there is a loading message
+# that gets integrated into the pdf directly. setting mathjax to None bypasses that bug.
+pio.kaleido.scope.mathjax = None
 
 from hardware_manager import HardwareManager
 
@@ -17,16 +21,16 @@ from hardware_manager import HardwareManager
 this_dir = pathlib.Path(__file__).parent.absolute()
 
 ALL_FEATURE_COLS = [
-    "num_tasks",
+    # "num_tasks",
     # "canopy_moisture",
     # "run_max_mem_rss_bytes",
     # "sim_time",
-    # "surface_moisture",
+    "surface_moisture",
     # "threads",
-    # "wind_direction",
-    # "wind_speed",
+    "wind_direction",
+    "wind_speed",
     # "run_uuid",
-    # "area",
+    "area",
     # "runtime",
     # "cpu_usage_total",
     # "mem_usage_total",
@@ -308,7 +312,7 @@ def run_sim(n_rounds: int = 100,
         )
         
         # Rename the axis 
-        fig.update_xaxes(title_text=feature_cols[0])
+        fig.update_xaxes(title_text=feature_cols[0].capitalize())
         fig.update_yaxes(title_text="Runtime", matches="y")
         
         # Hide duplicate y-axis titles on other facets
@@ -318,6 +322,7 @@ def run_sim(n_rounds: int = 100,
         
         fig.write_html(f"{savedir}/cb_{feature_cols[0]}.html")
         fig.write_image(f"{savedir}/cb_{feature_cols[0]}.png")
+        fig.write_image(f"./cb_{feature_cols[0]}.pdf")
 
         if motivation:
             plot_motivation(df, feature_cols[0], savedir)
@@ -415,6 +420,14 @@ def run(n_sims: int,
     print([info["rmse"] for info in baseline_infos])
     rmse_full = np.mean([info["rmse"] for info in baseline_infos])
     assert np.allclose([info["rmse"] for info in baseline_infos], rmse_full)
+    # get accuracy of full data
+    acc_full = np.mean([info["accuracy"] for info in baseline_infos])
+    assert np.allclose([info["accuracy"] for info in baseline_infos], acc_full)
+
+    info_df = df_sim.copy()
+    info_df['avg_rmse_full'] = rmse_full
+    info_df['avg_acc_full'] = acc_full
+    info_df.to_csv('bp3d_cb.csv')
 
     fig = px.box(
         df_sim, x="round", y="rmse",
@@ -450,10 +463,6 @@ def run(n_sims: int,
     fig.write_html(savedir.joinpath("rmse_line.html"))
     fig.write_image(savedir.joinpath("rmse_line.png"))
 
-
-    # get accuracy of full data
-    acc_full = np.mean([info["accuracy"] for info in baseline_infos])
-    assert np.allclose([info["accuracy"] for info in baseline_infos], acc_full)
 
     # Plot accuracy over time
     fig = px.line(
@@ -532,7 +541,8 @@ def main():
     args = parser.parse_args()
     n_sims = args.n_sims
     n_rounds = args.n_rounds
-    savedir = pathlib.Path(args.savedir).joinpath("results")
+    # savedir = pathlib.Path(args.savedir).joinpath("results")
+    savedir = this_dir.joinpath("results")
     savedir.mkdir(parents=True, exist_ok=True)
     motivation = args.motivation
     # Initialize HardwareManager with the CSV file path
@@ -541,8 +551,10 @@ def main():
 
     # tolerance_ratio is a float >= 0 to represent the amount of slowdown allowed for a less resource intensive hardware
     # when set to None, it selects the fastest hardware without reassessing in the case of a tie.
+    # when set to 0, it selects the fastest hardware, preferring cheaper hardwares in the case of a tie.
     tolerance_ratio: Union[float, None] = 0.05
-    feature_cols = ALL_FEATURE_COLS
+    # feature_cols = ALL_FEATURE_COLS
+    feature_cols = ['area']
     feats = '_'.join(feature_cols)
     results_dir = savedir.joinpath(feats)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -569,25 +581,6 @@ def main():
         tolerance_ratio=tolerance_ratio,
         tolerance_seconds=tolerance_seconds
     )
-    # run(
-    #     n_sims=n_sims,
-    #     n_rounds=n_rounds,
-    #     feature_cols=["wind_speed"],
-    #     savedir=results_dir / "wind_speed",
-    #     tolerance_ratio=tolerance_ratio,
-    # )
-    # run(
-    #     n_sims=n_sims,
-    #     n_rounds=n_rounds,
-    #     feature_cols=["area", "wind_speed", "wind_direction", "canopy_moisture", "surface_moisture"],
-    #     savedir=results_dir / "all",
-    #     tolerance_ratio=tolerance_ratio,
-    #     tolerance_seconds=tolerance_seconds
-    # )
-
-
-
-
 
 
 if __name__ == "__main__":

@@ -48,6 +48,7 @@ def traverse_data(base_path: pathlib.Path) -> pd.DataFrame:
     """Traverses the results folder and loads all data found in csv files"""
     # Traverse the directory structure
     dfs = {}
+    folder_name = ""
     for root, dirs, files in os.walk(base_path):
         for file in files:
             if file.endswith('.csv'):
@@ -60,11 +61,11 @@ def traverse_data(base_path: pathlib.Path) -> pd.DataFrame:
                 # Read the CSV file into a DataFrame
                 df = load_data(file_path)
                 
-            # Add the DataFrame to the dictionary under the folder name
-            if folder_name not in dfs:
-                dfs[folder_name] = pd.DataFrame()
-            
-            dfs[folder_name] = pd.concat([dfs[folder_name], df], ignore_index=True)
+                # Add the DataFrame to the dictionary under the folder name
+                if folder_name not in dfs:
+                    dfs[folder_name] = pd.DataFrame()
+                
+                dfs[folder_name] = pd.concat([dfs[folder_name], df], ignore_index=True)
     
     return dfs
 
@@ -97,8 +98,10 @@ def identify_hardware(data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
 
 def extend_df(df: pd.DataFrame, hardware: Hardware, ext_df: pd.DataFrame) -> pd.DataFrame:
     """Extend the dataframe with the hardware information"""
-    
-    df["hardware"] = hardware.value[1]
+    # df["hardware"] = '_'.join(hardware.value[0])
+    cpus, mem = hardware.value[0]
+    df["hardware"] = f"{cpus}_{mem}"
+    # df["hardware"] = hardware.value[1]
     ext_df = pd.concat([ext_df, df], ignore_index=True)
 
     return ext_df   
