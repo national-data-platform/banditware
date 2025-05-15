@@ -1,1 +1,1 @@
-# integrated-performance-framework
+# BanditWare
