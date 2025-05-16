@@ -22,7 +22,7 @@ this_dir = pathlib.Path(__file__).parent.absolute()
 
 ALL_FEATURE_COLS = [
     # "num_tasks",
-    # "canopy_moisture",
+    "canopy_moisture",
     # "run_max_mem_rss_bytes",
     # "sim_time",
     "surface_moisture",
@@ -193,7 +193,7 @@ def run_sim(n_rounds: int = 100,
     def get_model_accuracy(coefs: Dict[int, List[float]], bias: Dict[int, float], std: Dict[int, float]) -> float:
         """Get the accuracy of the model on the test data - how often does it predict the best hardware"""
         # use get_best_hardware to get the ground truth for the test values
-        truth = get_best_hardwares(tolerance_ratio)
+        truth = get_best_hardwares(tolerance_ratio=tolerance_ratio, tolerance_seconds=tolerance_seconds)
         # use the model to predict the best hardware
         predictions = []
 
@@ -560,8 +560,6 @@ def main():
     feats = '_'.join(feature_cols)
     results_dir = savedir.joinpath(feats)
     results_dir.mkdir(parents=True, exist_ok=True)
-    print(results_dir)
-
 
 
     run_sim(
