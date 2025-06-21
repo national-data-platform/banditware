@@ -500,7 +500,8 @@ def run(n_sims: int,
     checkpoint_rounds = [10, 100, n_rounds] if n_rounds > 100 else [10, n_rounds]
     # get average and std rmse at last round
     print("\n\nRMSE Stats:")
-    for r in [10, n_rounds]:
+    print(f"Full fit RMSE:  {rmse_full:.2f}")
+    for r in checkpoint_rounds:
         last_round_rmse = df_sim[df_sim["round"] == r - 1]
         avg_rmse = last_round_rmse["rmse"].mean()
         std_rmse = last_round_rmse["rmse"].std()
@@ -541,8 +542,8 @@ def main():
     args = parser.parse_args()
     n_sims = args.n_sims
     n_rounds = args.n_rounds
-    # savedir = pathlib.Path(args.savedir).joinpath("results")
-    savedir = this_dir.joinpath("results")
+    savedir = this_dir if args.savedir is None else pathlib.Path(args.savedir)
+    savedir = savedir.joinpath("results")
     savedir.mkdir(parents=True, exist_ok=True)
     motivation = args.motivation
     # Initialize HardwareManager with the CSV file path
