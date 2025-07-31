@@ -601,6 +601,8 @@ def main():
     # feature_cols = ALL_FEATURE_COLS
     feature_cols = ['area']
     feats = '_'.join(feature_cols)
+    if set(feature_cols) == set(ALL_FEATURE_COLS):
+        feats = "all"
     results_dir = savedir.joinpath(feats)
     results_dir.mkdir(parents=True, exist_ok=True)
 
