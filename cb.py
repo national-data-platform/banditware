@@ -1,3 +1,16 @@
+"""
+A contextual Bandit algorithm to predict most efficient hardware configurations to optimize runtime and (optionally) hardware resource allocation.
+
+General code flow:
+* `run()` runs n simulations of the contextual bandit algorithm, calling `run_sim` n times.
+* `run_sim` runs the contextual bandit algorithm once
+    * initializes a new backend model for each hardware configuration to predict runtime from features
+    * each round for n rounds: 
+        * selects a new run on a chosen (exploration v exploitation) hardware
+        * adds that run to the training set for that hardware's backend model
+        * fits the model to update predictions on the best hardwares for a given feature set.
+"""
+
 from models import Model, ModelInterface
 import json
 from functools import lru_cache, wraps
@@ -44,8 +57,15 @@ ALL_FEATURE_COLS = [
 ]
 
 @lru_cache(maxsize=None)
-def load_data(*feature_cols: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Load the data from the csv file"""
+def load_data(*feature_cols: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Get the training data and testing data. 
+    If the data has not yet been read from the CSV, do so and create the split.
+    If the data has already been read, keep it in memory and return that immediately.
+
+    Returns:
+        The train data and test data split
+    """
     feature_cols = list(feature_cols)
     _data = pd.read_csv(f"{this_dir}/results/data/data.csv")
 
@@ -91,8 +111,31 @@ def run_sim(n_rounds: int = 100,
             motivation: bool = False,
             model_enum: Model = Model.LINEAR_REGRESSION,
             model_kwargs: Dict = None
-            ) -> pd.DataFrame:
-    """Run a single simulation of the contextual bandit algorithm"""
+            ) -> Tuple[pd.DataFrame, Dict[str, float]]:
+    """
+    Run a single simulation contextual bandit algorithm on the preprocessed data (from `preprocess.py`).
+    Put the resulting figures and data into the specified `savedir` directory.
+
+    Parameters:
+        n_rounds: how many rounds to run the simulation on
+        tolerance_ratio: ratio of acceptable slowdown for choosing a less resource-intensive hardware.
+            * Ex: `tolerance_ratio=0.1` will choose a less intensive hardware as long as it is at most 10% slower than the fastest hardware.
+        tolerance_seconds: acceptable seconds of slowdown for choosing a less resource-intensive hardware.
+            * Ex: `tolerance_seconds=60` will choose a less intensive hardware as long as it is at most 60s slower than the fastest hardware.
+        e_start: initial epsilon value for exploration
+        e_decay: value of decay for the exponential exploration function
+        e_min: minimum epsilon value for exploration
+        feature_cols: which feature columns to use to predict runtime from
+        savedir: where to save any figures and data from the simulation
+        motivation: whether to plot a graph showing the accuracy of the contextual bandit algorithm at predicting runtime per hardware.
+            * if `motivation` is True, len(feature_cols) should be 1 to accurately portray this graph.
+        model_enum: which backend model to use for the prediction of runtimes based on features.
+            The contextual bandit algorithm chooses which runs to train on for each hardware, and the backend models predict the relationship between features and runtimes per hardware.
+        model_kwargs: any hyperparameters for the model to take in upon initialization.
+
+    Returns:
+        a Dataframe of algorithm accuracy/rmse by round, a dict of baseline info of the model
+    """
     train_data, test_data = load_data(*feature_cols)
     unique_features = train_data[feature_cols].drop_duplicates().values
     unique_hardware = sorted(train_data["hardware"].unique())
@@ -161,8 +204,9 @@ def run_sim(n_rounds: int = 100,
         Parameters:
             avg_hardware_runtimes: Dictionary of hardware configurations mapped to their average runtimes.
             tolerance_ratio: Fraction of acceptable runtime increase for choosing hardware with fewer resources. 
-                Ex: tolerance_ratio=0.1 allows a 10% slower runtime if the hardware uses fewer resources
-        
+                * Ex: `tolerance_ratio=0.1` allows up to a 10% slower runtime if the hardware uses fewer resources
+            tolerance_seconds: acceptable runtime increase in seconds for choosing hardware with fewer resources.
+                * Ex: `tolerance_seconds=60` allows up to a 60s slowdown if the hardware uses fewer resources.
         Returns:
             The optimal hardware configuration, accounting for resource efficiency within the tolerance.
         """
@@ -171,7 +215,7 @@ def run_sim(n_rounds: int = 100,
 
         # get information on the hardware that has the fastest runtime
         fastest_hardware = min(avg_hardware_runtimes, key=avg_hardware_runtimes.get)
-        # if requestion no tolerance effects, just use the fastest hardware
+        # if requesting no tolerance effects, just use the fastest hardware
         if tolerance_ratio is None:
             if tolerance_seconds == 0:
                 return fastest_hardware
@@ -229,30 +273,29 @@ def run_sim(n_rounds: int = 100,
             predictions.append(predicted_hardware)
 
         return np.mean([t == p for t, p in zip(truth, predictions)])
-    
+
     def select_features_and_hardware(
             unexplored_feature_hardware_pairs: List[Tuple[np.ndarray, int]]) -> Tuple[np.ndarray, int]:
         assert len(unexplored_feature_hardware_pairs) > 0, "Nothing to choose from - list is empty"
-        
+
         rand_index = random.randint(0, len(unexplored_feature_hardware_pairs)-1)
         # get a random choice from the unexplored (feature,hardware) pairs
         features, hardware = unexplored_feature_hardware_pairs.pop(rand_index)
         return features, hardware
-        
+
     # Check that there are runtimes for all hardware/features in the training data
     for hardware, features in product(unique_hardware, unique_features):
         runtimes = get_runtimes(features, hardware, train_data)
         assert(len(runtimes) > 0)
 
     samples: Dict[int, List[Tuple[List[float], float]]] = {i: [] for i in unique_hardware}
-     
+
     std = {i: 0 for i in unique_hardware}
     rows_runtime = []
     e = e_start
-    
+
     unexplored_feature_hardware_pairs = list(product(unique_features, unique_hardware))
 
-    
     # random_feature_choices = rand_feature_choices()
     for i in range(n_rounds):
         if len(unexplored_feature_hardware_pairs) > 0:
@@ -266,17 +309,17 @@ def run_sim(n_rounds: int = 100,
                                key=lambda h: float(predict_one(model_instances[h], features)))
             else:
                 hardware = random.choice(unique_hardware)
-            
+
         # Sample the runtime of the workflow on the selected features and hardware
         runtime = sample_runtime(features, hardware, df=train_data)
         # print(f"features:\n{features}\nhardware: {hardware}\nruntime: {runtime}")
         samples[hardware].append((features, runtime)) 
 
-        # Update the coefficients
+
+        # fit the chosen model on this hardware’s samples
         X, y = zip(*samples[hardware])
         X = np.array(X)
         y = np.array(y)
-        # fit the chosen model on this hardware’s samples
         curr_model = model_instances[hardware].fit(X, y)
         # if you still need an “error” estimate, compute residuals:
         preds = curr_model.predict(X)
@@ -291,7 +334,7 @@ def run_sim(n_rounds: int = 100,
             for h, x in zip(test_data["hardware"], X_test)
         ])
         rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-        
+
         acc = get_model_accuracy(model_instances)
 
         rows_runtime.append({
@@ -338,16 +381,16 @@ def run_sim(n_rounds: int = 100,
             opacity=0.5,
             symbol="mode"
         )
-        
+
         # Rename the axis 
         fig.update_xaxes(title_text=feature_cols[0].capitalize())
         fig.update_yaxes(title_text="Runtime", matches="y")
-        
+
         # Hide duplicate y-axis titles on other facets
         for axis in fig.layout:
             if axis.startswith("yaxis") and axis != "yaxis":
                 fig.layout[axis].title.text = ""
-        
+
         fig.write_html(f"{savedir}/cb_{feature_cols[0]}.html")
         fig.write_image(f"{savedir}/cb_{feature_cols[0]}.png")
         fig.write_image(f"{savedir}/cb_{feature_cols[0]}.pdf")
@@ -436,8 +479,30 @@ def run(n_sims: int,
         model_enum: Model = Model.LINEAR_REGRESSION,
         model_kwargs: Dict = None
         ):
-    dfs = []
-    baseline_infos = []
+    """
+    Run a contextual bandit algorithm on the preprocessed data (from `preprocess.py`) n_sims times.
+    Put the resulting figures and data into the specified `savedir` directory.
+
+    Parameters:
+        n_sims: how many simulations to run the contextual bandit algorithm on.
+        n_rounds: how many rounds to run the contextual bandit algorithm for.
+        feature_cols: which columns in the dataset to use as features for runtime prediction.
+        savedir: the directory to save the resulting figures and data of the algorithm.
+        tolerance_ratio: ratio of acceptable slowdown from the fastest runtime for choosing a less resource intensive hardware.
+            * Ex: `tolerance_ratio=0.1` would choose a less intensive hardware if it was at most 10% slower than the fastest, more intensive hardware.
+            * If tolerance_ratio = 0.0, it only chooses the less intensive hardware in a tie.
+            * If tolerance_ratio = None, it doesn't re-analyze the runtimes to look for better options
+            * If both tolerance_ratio and tolerance_seconds are specified, it chooses the larger acceptable tolerance.
+        tolerance_seconds: additional seconds of acceptable slowdown from the fastest runtime for choosing a less resource intensive hardware.
+            * Ex: `tolerance_seconds=60` would choose a less intensive hardware if it was at most 60s slower than the fastest, more intensive hardware.
+            * If tolerance_seconds = 0.0, it only chooses the less intensive hardware in a tie.
+            * If both tolerance_ratio and tolerance_seconds are specified, it chooses the larger acceptable tolerance.
+        model_enum: which backend model to use for the prediction of runtimes based on features.
+            The contextual bandit algorithm chooses which runs to train on for each hardware, and the backend models predict the relationship between features and runtimes per hardware.
+        model_kwargs: any hyperparameters for the model to take in upon initialization.
+    """
+    dfs : List[pd.DataFrame] = []
+    baseline_infos : List[Dict] = []
     for i in range(n_sims):
         print(f"Running simulation {i+1}/{n_sims}", end="\r")
         df, baseline_info = run_sim(n_rounds=n_rounds, tolerance_ratio=tolerance_ratio,
