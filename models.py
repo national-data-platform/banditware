@@ -184,7 +184,3 @@ class Model(Enum):
         """
         return self.value(**kwargs)
 
-
-if __name__ == "__main__":
-    print(Model.LINEAR_REGRESSION.create())
-    print(type(Model["RIDGE"]))
