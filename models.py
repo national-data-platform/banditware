@@ -86,16 +86,16 @@ class SklearnWrapper(BaseEstimator, ModelInterface):
     def __init__(self, model_cls, **params):
         self.model_cls = model_cls
         self.params = params
-        self._model = None
         self._has_fit = False
+        self._model = self.model_cls(**params)
 
     def fit(self, X: np.ndarray, y: np.ndarray):
-        self._model = self.model_cls(**self.params)
         self._model.fit(X, y)
         self._has_fit = True
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
+        assert self._has_fit, "Model has not yet fit. `.fit()` must be called before `.predict()`"
         return self._model.predict(X)
 
     def has_fit(self) -> bool:
