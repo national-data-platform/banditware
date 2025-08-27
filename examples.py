@@ -5,7 +5,6 @@ from models import Model
 from banditware import BanditWare
 
 np.random.seed(42)
-random.seed(42)
 
 def from_nothing(full_data, feature_cols, model_choice):
     data = full_data.sample(frac=1, replace=False)
@@ -13,16 +12,14 @@ def from_nothing(full_data, feature_cols, model_choice):
     one_row = data.iloc[0]
     two_rows = data.iloc[1:3]
     several_rows = data.iloc[4:30]
-    bw = BanditWare(
-        feature_cols=feature_cols,
-        model_choice=model_choice
-    )
+    bw = BanditWare(feature_cols=feature_cols, model_choice=model_choice)
     print(bw.suggest_hardware())
     bw.add_historical_data(one_row)
     print(bw.suggest_hardware())
     bw.add_historical_data(two_rows)
     print(bw.suggest_hardware())
     bw.add_historical_data(several_rows)
+    print(bw.suggest_hardware())
 
 
 
@@ -45,7 +42,7 @@ def main():
     bw.train()
     bw.test_accuracy(model_choice=Model.RANDOM_FOREST, plot_runtime_predictions=False)
 
-    from_nothing(bp3d_data, all_bp3d_feature_cols, model_choice=Model.RANDOM_FOREST)
+    # from_nothing(bp3d_data, all_bp3d_feature_cols, model_choice=Model.RANDOM_FOREST)
 
 if __name__ == "__main__":
     main()
