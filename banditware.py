@@ -456,7 +456,7 @@ class BanditWare():
             df = pd.DataFrame()
             return df
         # get data
-        full_data = data if data is not None else pd.read_csv(save_file)
+        full_data = data.copy() if data is not None else pd.read_csv(save_file)
         HardwareManager.init_manager(full_data)
         # Replace the hardware name with an integer identifier in hardware manager
         full_data["hardware"] = full_data["hardware"].apply(lambda x: int(HardwareManager.get_hardware_idx(x)))
