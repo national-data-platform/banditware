@@ -80,8 +80,7 @@ class BanditWare():
     #       PUBLIC METHODS
     # ==========================
 
-    # TODO: make sure this works with new_data as a single run pd.Series
-    def add_historical_data(self, new_data:pd.DataFrame,
+    def add_historical_data(self, new_data:Union[pd.DataFrame, pd.Series],
                             update_saved_data:bool=True, retrain:bool=True) -> None:
         """
         Add application run data to BanditWare historical data and optionally retrain models
@@ -92,11 +91,20 @@ class BanditWare():
         """
         # TODO: handle if new_data has hardware index instead of "cpu_ram" str in hardware col
         needed_cols = ["runtime"] + self.feature_cols
+        # Handle new_data is an incorrectly formatted single row
+        if isinstance(new_data, pd.Series) or new_data.shape[1] == 1:
+            new_data = new_data.T.reset_index(drop=True)
+        
+        assert len(new_data) > 0, "new_data must not be empty"
         bad_cols_msg = f"new_data must contain all necessary columns: {needed_cols}"
         assert set(needed_cols).issubset(set(new_data.columns)), bad_cols_msg
+
         old_data = self._historical_data
-        old_data["hardware"] = old_data["hardware"].apply(HardwareManager.get_hardware)
-        full_data = pd.concat([old_data, new_data], ignore_index=True)
+        if len(old_data) == 0:
+            full_data = new_data
+        else:
+            old_data["hardware"] = old_data["hardware"].apply(HardwareManager.get_hardware)
+            full_data = pd.concat([old_data, new_data], ignore_index=True)
         self._historical_data = self._init_data(full_data)
         if update_saved_data:
             self.save_data()
@@ -152,7 +160,6 @@ class BanditWare():
 
         # Exploration
         explore = False if prohibit_exploration else np.random.rand() < self._epsilon
-        print(f"\t{explore=}") # TODO: remove this
         if update_epsilon and not prohibit_exploration:
             self._epsilon = max(self._epsilon * self._epsilon_decay, self._epsilon_min)
         if explore:
@@ -446,8 +453,7 @@ class BanditWare():
         save_file = self._save_dir.joinpath(self.DATA_FILE_NAME)
         # handle case of no data
         if not save_file.exists() and data is None:
-            necessary_cols = self.feature_cols + ['hardware', 'runtime']
-            df = pd.DataFrame(columns=necessary_cols)
+            df = pd.DataFrame()
             return df
         # get data
         full_data = data if data is not None else pd.read_csv(save_file)
