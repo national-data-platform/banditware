@@ -68,7 +68,6 @@ def load_data(*feature_cols: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
     feature_cols = list(feature_cols)
     _data = pd.read_csv(f"{this_dir}/results/data/data.csv")
-
     # Replace the hardware name with an integer identifier in hardware manager
     _data["hardware"] = _data["hardware"].apply(lambda x: int(HardwareManager.get_hardware_idx(x)))
 
@@ -245,11 +244,15 @@ def run_sim(n_rounds: int = 100,
             # update best hardware if a larger average proportional decrease is found
             if overall_resource_decrease > max_resource_decrease:
                 best_hardware = hardware
+                max_resource_decrease = overall_resource_decrease
         
         return best_hardware
     
     @lru_cache(maxsize=None)
     def get_best_hardwares(tolerance_ratio: Union[float, None] = None, tolerance_seconds: int = 0) -> List[int]:
+        """
+        Finds the best hardware for each row in the test data.
+        """
         best_hardwares = []
         for features in test_data[feature_cols].values:
             hardware_avg_runtimes = get_hardware_avg_runtimes(features, unique_hardware, df=test_data)
@@ -299,10 +302,7 @@ def run_sim(n_rounds: int = 100,
     # random_feature_choices = rand_feature_choices()
     for i in range(n_rounds):
         if len(unexplored_feature_hardware_pairs) > 0:
-            # coverage phase: make sure each combination gets explored at least once
-            features, hardware = select_features_and_hardware(unexplored_feature_hardware_pairs) 
-        else:
-            # bandit phase: run the bandit algorithm as normal
+            # Exploration vs Exploitation
             features = random.choice(unique_features)
             if np.random.rand() >= e:
                 hardware = min(unique_hardware, 
@@ -348,13 +348,15 @@ def run_sim(n_rounds: int = 100,
         e = max(e * e_decay, e_min)
 
     truth_models, std_truth = get_truth()
+
     if savedir is not None and len(feature_cols) == 1: 
         savedir.mkdir(parents=True, exist_ok=True)   
 
         feature_col = feature_cols[0]
         rows = []
         for hardware_idx in unique_hardware:
-            for x in np.linspace(train_data[feature_col].min(), train_data[feature_col].max(), 10):
+            # for x in np.linspace(train_data[feature_col].min(), train_data[feature_col].max(), 10):
+            for x in train_data[feature_col].unique():
                 y_pred = predict_one(model_instances[hardware_idx], x)
                 rows.append({
                     "x": x,
@@ -364,13 +366,22 @@ def run_sim(n_rounds: int = 100,
                     "error": std[hardware_idx]
                 })
                 y_actual = predict_one(truth_models[hardware_idx], x)
-                rows.append({
-                    "x": x + 0.01,
-                    "y": y_actual,
-                    "mode": "Actual",
-                    "Hardware": hardware_idx,
-                    "error": std_truth[hardware_idx]
-                })
+                # rows.append({
+                #     "x": x + 0.01,
+                #     "y": y_actual,
+                #     "mode": "Actual",
+                #     "Hardware": hardware_idx,
+                #     "error": std_truth[hardware_idx]
+                # })
+                y_spread = train_data[train_data["hardware"]==hardware_idx]["runtime"]
+                for y in y_spread:
+                    rows.append({
+                        "x": x + 30000,
+                        "y": y,
+                        "mode": "Actual",
+                        "Hardware": hardware_idx,
+                        "error": 0
+                    })
 
         df = pd.DataFrame(rows)
         fig = px.scatter(
@@ -390,7 +401,7 @@ def run_sim(n_rounds: int = 100,
         for axis in fig.layout:
             if axis.startswith("yaxis") and axis != "yaxis":
                 fig.layout[axis].title.text = ""
-
+        fig.show()
         fig.write_html(f"{savedir}/cb_{feature_cols[0]}.html")
         fig.write_image(f"{savedir}/cb_{feature_cols[0]}.png")
         fig.write_image(f"{savedir}/cb_{feature_cols[0]}.pdf")
@@ -505,8 +516,10 @@ def run(n_sims: int,
     baseline_infos : List[Dict] = []
     for i in range(n_sims):
         print(f"Running simulation {i+1}/{n_sims}", end="\r")
+        save_directory = savedir if i == 0 else None  # only save plots of one simulation
         df, baseline_info = run_sim(n_rounds=n_rounds, tolerance_ratio=tolerance_ratio,
-                                    feature_cols=feature_cols, tolerance_seconds=tolerance_seconds,
+                                    feature_cols=feature_cols, savedir=save_directory,
+                                    tolerance_seconds=tolerance_seconds,
                                     model_enum=model_enum, model_kwargs=model_kwargs)
         baseline_info["sim"] = i
         df["sim"] = i
@@ -653,8 +666,10 @@ def main():
     savedir = savedir.joinpath("results")
     savedir.mkdir(parents=True, exist_ok=True)
     motivation = args.motivation
-    # Initialize HardwareManager with the CSV file path
-    HardwareManager.init_manager(savedir.joinpath("data/data.csv"))
+    # Initialize HardwareManager with the preprocessed data
+    data_file = savedir.joinpath("data/data.csv")
+    df = pd.read_csv(data_file)
+    HardwareManager.init_manager(df)
 
 
     # tolerance_ratio is a float >= 0 to represent the amount of slowdown allowed for a less resource intensive hardware
@@ -674,17 +689,6 @@ def main():
     model_enum = Model[args.model]
     model_kwargs = json.loads(args.model_params)
 
-
-    run_sim(
-        n_rounds=n_rounds,
-        tolerance_ratio=tolerance_ratio,
-        tolerance_seconds=tolerance_seconds,
-        feature_cols=feature_cols,
-        savedir=results_dir,
-        motivation=motivation,
-        model_enum=model_enum,
-        model_kwargs=model_kwargs
-    )
 
     run(
         n_sims=n_sims,

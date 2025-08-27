@@ -734,8 +734,6 @@ def main():
     args = get_parser_args()
     
     preprocessed_data = pd.read_csv("results/data/data.csv")
-    # TODO: remove incorrect outliers in actual data, not just in this program
-    preprocessed_data = preprocessed_data[preprocessed_data['runtime'] < 200_000]
     final_rows = preprocessed_data.iloc[-5:]
     preprocessed_data = preprocessed_data.iloc[:-5]
     # feat_cols = ['canopy_moisture', 'surface_moisture', 'threads', 'wind_direction', 'wind_speed', 'area']
