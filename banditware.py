@@ -202,6 +202,9 @@ class BanditWare():
         self._fully_trained = True
 
     def save_data(self):
+        """
+        Save the historical data to a file
+        """
         save_data = self._historical_data.copy()
         save_data["hardware"] = save_data["hardware"].apply(HardwareManager.get_hardware)
         if not self._save_dir.exists():
@@ -424,6 +427,7 @@ class BanditWare():
         fig.update_xaxes(title_text=feature_col.capitalize())
         fig.update_yaxes(title_text="Runtime", matches="y")
         fig.show()
+        fig.write_image(f"{self._save_dir}/runtime_predictions_{feature_col}.pdf")
 
     # ==========================
     #       PRIVATE METHODS
