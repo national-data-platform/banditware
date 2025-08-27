@@ -114,6 +114,7 @@ class KerasReg(BaseEstimator, ModelInterface):
         optimizer=None,
         epochs=100,
         batch_size=32,
+        layers=5,
         **kwargs
     ):
         if tf is None:
@@ -125,6 +126,7 @@ class KerasReg(BaseEstimator, ModelInterface):
         self.epochs = epochs
         self.batch_size = batch_size
         self.kwargs = kwargs
+        self.layers = layers
         self._has_fit = False
         self._model = None
 
@@ -174,7 +176,7 @@ class Model(Enum):
     GRADIENT_BOOSTING = member(
         partial(SklearnWrapper, GradientBoostingRegressor))
     MLP = member(partial(SklearnWrapper, MLPRegressor))
-    KERAS = member(KerasReg)
+    # KERAS = member(KerasReg)
 
     def create(self, **kwargs):
         """
