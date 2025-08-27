@@ -352,7 +352,7 @@ class BanditWare():
         self.reset_feature_cols(feature_cols)
         self.reset_models(model_choice, **model_params)
 
-    def plot_runtime_predictions(self, data:Union[pd.DataFrame, None],
+    def plot_runtime_predictions(self, data:Union[pd.DataFrame, None] = None,
                                  model_instances:Union[None, Dict[int,ModelInterface]] = None):
         """
         Plot the predicted runtime over the feature column for each hardware
