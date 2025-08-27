@@ -215,6 +215,7 @@ class BanditWare():
             tolerance_seconds: int = 0,
             print_results: bool = True,
             ignore_incomplete_feature_rows: bool = False,
+            plot_runtime_predictions: bool = False,
             model_choice: Union[str, Model, None] = None,
             **model_params) -> Dict[str,float]:
         """
@@ -292,9 +293,12 @@ class BanditWare():
             test_msg = f"Time to test: {testing_time:.2f} sec"
             print("Test Statistics:", acc_msg, rmse_msg, train_msg, test_msg, sep="\n\t")
 
-        # # For debugging: see if the runtime predictions are reasonable on each hardware
-        # if len(self.feature_cols) == 1:
-        #     self.plot_predictions(full_data, models_by_hardware)
+        # For debugging: see if the runtime predictions are reasonable on each hardware
+        if plot_runtime_predictions:
+            if len(self.feature_cols) == 1:
+                self.plot_runtime_predictions(test_data, models_by_hardware)
+            else:
+                print("Cannot print runtime predictions if there is more than one feature column.")
 
         stats_dict = {"accuracy":accuracy, "rmse":rmse, "train_time":training_time, "test_time":testing_time}
         return stats_dict
@@ -379,7 +383,7 @@ class BanditWare():
         runtime_pred_uncertainty = {h: 0 for h in self._hardwares}
         for hardware_idx in self._hardwares:
             data_portion = data[data["hardware"]==hardware_idx]
-            X = pd.DataFrame(data=data_portion[feature_col], columns=["area"])
+            X = pd.DataFrame(data=data_portion[feature_col], columns=["area"]).to_numpy()
             pred_runtimes = model_instances[hardware_idx].predict(X)
             actual_runtimes = data_portion["runtime"].to_numpy()
             pred_std_error = np.std(pred_runtimes - actual_runtimes)
