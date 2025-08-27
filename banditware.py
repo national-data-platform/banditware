@@ -295,6 +295,7 @@ class BanditWare():
 
         # For debugging: see if the runtime predictions are reasonable on each hardware
         if plot_runtime_predictions:
+            # TODO: make it so it can work with multiple feature cols
             if len(self.feature_cols) == 1:
                 self.plot_runtime_predictions(test_data, models_by_hardware)
             else:
@@ -614,7 +615,7 @@ class BanditWare():
         Finds the best hardware for each row in the test data.
         Parameters:
             ...
-            void_missing_hardwares: if True, sets any rows with a 
+            void_missing_hardwares: if True, ignores all rows where data for a hardware is missing
         """
         warn_missing_data = False
         best_hardwares = []
