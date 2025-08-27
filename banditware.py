@@ -662,19 +662,6 @@ class BanditWare():
 
         hardware_prediction_accuracy = np.mean(prediction_results)
         return hardware_prediction_accuracy
-    
-    # def _get_runtime_prediction_rmse(self, models: Dict[int, ModelInterface],
-    #                                  data:pd.DataFrame, print_info:bool = True) -> Dict[int, float]:
-    #     rmse_by_model = {}
-    #     data_by_hardware = data.groupby("hardware")
-    #     for h, df in data_by_hardware:
-    #         pred_runtimes = models[h].predict(df[self.feature_cols])
-    #         actual_runtimes = df['runtime'].to_numpy()
-    #         rmse_by_model[h] = np.sqrt(mean_squared_error(actual_runtimes, pred_runtimes))
-    #     if print_info:
-    #         rmse_msg_dict = {f"hardware {h}": f"{float(rmse):.2f}" for h, rmse in rmse_by_model.items()}
-    #         print(f"Runtime Prediction RMSE:\n\t{rmse_msg_dict}")
-    #     return rmse_by_model
 
     def _plot_motivation(self, df: pd.DataFrame):
         assert len(self.feature_cols) == 1, "`_plot_predictions` can only be called when there is only one feature column."
