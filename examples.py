@@ -6,26 +6,37 @@ from banditware import BanditWare
 
 np.random.seed(42)
 
-def from_nothing(full_data, feature_cols, model_choice):
+def from_nothing(full_data, feature_cols, model_choice, features=None, prohibit_exploration=False):
     """
     Represents General NDP Workflow: 
         * User start with no historical data and gets a hardware suggestion
         * User continuosly more historical data and gets hardware suggestions over time
     """
-    print("BanditWare going from nothing to having training data")
+    print("Starting from nothing then adding training data")
     data = full_data.sample(frac=1, replace=False)
     data = data.reset_index(drop=True)
     one_row = data.iloc[[0]]
     two_rows = data.iloc[1:3]
-    several_rows = data.iloc[4:30]
-    bw = BanditWare(feature_cols=feature_cols, model_choice=model_choice)
-    print("\tsuggested_hardware:", bw.suggest_hardware())
-    bw.add_historical_data(one_row)
-    print("\tsuggested_hardware:", bw.suggest_hardware())
-    bw.add_historical_data(two_rows)
-    print("\tsuggested_hardware:", bw.suggest_hardware())
-    bw.add_historical_data(several_rows)
-    print("\tsuggested_hardware:", bw.suggest_hardware())
+    several_rows = data.iloc[3:30]
+    rest_of_rows = data.iloc[30:]
+    incremental_updates = [one_row, two_rows, several_rows, rest_of_rows]
+    save_dir = "./matmul" if "size" in data.columns else "./bp3d"
+    
+    bw = BanditWare(feature_cols=feature_cols, save_dir=save_dir, model_choice=model_choice)
+    
+    print("\tsuggested_hardware:", bw.suggest_hardware(prohibit_exploration=prohibit_exploration))
+    for df in incremental_updates:
+        bw.add_historical_data(
+            df, update_saved_data=False, retrain=True)
+        suggested_hardware = bw.suggest_hardware(
+            features, prohibit_exploration=prohibit_exploration, smart_suggest=True)
+        print("\tsuggested_hardware:", suggested_hardware)
+
+    
+    bw.reset_feature_cols(['size'])
+    bw.train()
+    bw.plot_runtime_predictions()
+
 
 
 def test_accuracy(data, feature_cols, model_choice):
@@ -34,11 +45,12 @@ def test_accuracy(data, feature_cols, model_choice):
     `bw.test_accuracy()` Uses newly trained models (only trained on the subset),
     even if `bw` is already trained.
     """
+    save_dir = "./matmul" if "size" in data.columns else "./bp3d"
     bw = BanditWare(
         data = data,
         feature_cols = feature_cols,
         # feature_cols = all_bp3d_feature_cols,
-        save_dir = "./bp3d",
+        save_dir = save_dir,
         plot_motivation = False,
         # model_choice = Model.LINEAR_REGRESSION
         model_choice = model_choice
@@ -46,15 +58,30 @@ def test_accuracy(data, feature_cols, model_choice):
     bw.test_accuracy(model_choice=model_choice, plot_runtime_predictions=False)
 
 def main():
-    bp3d_data = preprocess(base_path="data/bp3d_data")
-    matmul_data = preprocess(data_file="data/matmul.csv")
+    # bp3d_data = preprocess(base_path="data/bp3d_data")
+    # matmul_data = preprocess(data_file="data/matmul.csv")
+    # 
+    bp3d_data = pd.read_csv("preprocessed_data/bp3d.csv")
+    matmul_data = pd.read_csv("preprocessed_data/matmul.csv")
 
+    matmul_feature_cols = ["size", "sparsity", "min", "max"]
     all_bp3d_feature_cols = ["area", "canopy_moisture", "run_max_mem_rss_bytes",
                              "sim_time","surface_moisture","wind_direction","wind_speed"]
     bp3d_subset_features = ["area", "canopy_moisture","wind_direction","wind_speed"]
-
-    test_accuracy(bp3d_data, feature_cols=bp3d_subset_features, model_choice=Model.RANDOM_FOREST)
-    from_nothing(bp3d_data, bp3d_subset_features, Model.LINEAR_REGRESSION)
+    # test_accuracy(bp3d_data, feature_cols=bp3d_subset_features, model_choice=Model.RANDOM_FOREST)
+    # from_nothing(bp3d_data, bp3d_subset_features, Model.LINEAR_REGRESSION)
+    test_accuracy(
+        matmul_data,
+        feature_cols=matmul_feature_cols,
+        model_choice=Model.DECISION_TREE
+        )
+    from_nothing(
+        matmul_data, 
+        feature_cols=matmul_feature_cols,
+        model_choice=Model.RANDOM_FOREST,
+        features=[12_500, 0.0, 1, 10000],
+        prohibit_exploration=True
+        )
 
 if __name__ == "__main__":
     main()
