@@ -5,6 +5,7 @@ import time
 import pathlib
 import argparse
 from typing import Dict, List, Tuple, Union
+import gower
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -32,16 +33,19 @@ TODO:
 np.random.seed(42)
 random.seed(42)
 
-class BanditWare():
+class BanditWare:
+    SAVE_FILE_NAME: str = "bw_data.csv"
     # defaults
     DEFAULT_TOLERANCE_RATIO: float = 0.0
     DEFAULT_TOLERANCE_SECONDS: int = 0
     DEFAULT_EPSILON_START: float = 1.0
     DEFAULT_EPSILON_DECAY: float = 0.99
     DEFAULT_EPSILON_MIN: float = 0.0
+    DEFAULT_SAVE_DIR: str = "bw_unnamed"
     # what hardware to suggest when there is no historical data
     NO_DATA_HARDWARE_SUGGESTION: Tuple[int,int] = (2,16)  # (CPU count, RAM in GB)
-    DATA_FILE_NAME: str = "bw_data.csv"
+    # in `suggest_hardware`, what size self._historical_data must be to default set smart_suggest to False
+    SMART_SUGGEST_CUTOFF_SIZE: int = 1000
 
     def __init__(self,
                  data:Union[pd.DataFrame,None] = None,
@@ -116,6 +120,8 @@ class BanditWare():
             self, features:List, tolerance_ratio: Union[float,None] = DEFAULT_TOLERANCE_RATIO,
             tolerance_seconds: int = DEFAULT_TOLERANCE_SECONDS):
         """Given a set of feature values and tolerance, predict the best hardware"""
+        err_msg = "length of `features` must match the length of BanditWare.feature_columns"
+        assert len(features) == len(self.feature_cols), err_msg
         # Make sure all models have fit before running predictions
         if not self._fully_trained:
             self.train()
@@ -131,6 +137,7 @@ class BanditWare():
                          tolerance_ratio: Union[float, None] = DEFAULT_TOLERANCE_RATIO, tolerance_seconds: int = DEFAULT_TOLERANCE_SECONDS,
                          prohibit_exploration:bool = False,
                          update_epsilon:bool = True,
+                         smart_suggest: Union[bool, None] = None,
                          prefer_recent_data:bool = False) -> Tuple[int, int]:
         # TODO: implement optional parameter to more heavily weight recent data
         # TODO: add performance data functionality - suggest new hardware based on cpu_usage_% and mem_usage_% (use PREMOA)
@@ -148,15 +155,26 @@ class BanditWare():
                 * It will always choose the max tolerance between tolerance_ratio and tolerance_seconds.
             prohibit_exploration: whether to only exploit (choose the best predicted hardware) or possibly continue exploring as well
             update_epsilon: whether to slowly decrease exploration chances
+            smart_suggest: How to handle when no rows match the given feature set
+                * if smart_suggest is True, find the nearest existing feature set and make hardware suggestions off those runtime predictions. This is expensive if there is a lot of historical data. 
+                * if smart_suggest is False, suggest the most common hardware in self._historical_data
+                * if smart_suggest is None (default), if there is a lot of historical data (>1000 rows), smart_suggest will be set to False. Otherwise True.
             prefer_recent_data: whether to give higher weight to more recent historical data
         Returns:
             hardware_suggestion: tuple of (CPU count, RAM amount in GB)
         """
-        if len(self._historical_data) == 0:
-            return self.NO_DATA_HARDWARE_SUGGESTION
+        def sanity_check(hardware_suggestion:Tuple[int,int]):
+            cpu_suggestion, mem_suggestion = hardware_suggestion
+            err_msg = f"Something went wrong: sugested cpu or memory < 1: ({hardware_suggestion})"
+            assert cpu_suggestion >= 1 and mem_suggestion >= 1, err_msg
         
-        cpu_suggestion = 0
-        mem_suggestion = 0
+        if features is not None:
+            err_msg = "length of `features` must match the length of BanditWare.feature_columns"
+            assert len(features) == len(self.feature_cols), err_msg
+        if len(self._historical_data) == 0:
+            hardware_suggestion = self.NO_DATA_HARDWARE_SUGGESTION
+            sanity_check(hardware_suggestion)
+            return hardware_suggestion
 
         # Exploration
         explore = False if prohibit_exploration else np.random.rand() < self._epsilon
@@ -164,10 +182,8 @@ class BanditWare():
             self._epsilon = max(self._epsilon * self._epsilon_decay, self._epsilon_min)
         if explore:
             hardware_idx = random.choice(self._hardwares)
-            cpu_suggestion, mem_suggestion = HardwareManager.spec_from_hardware_idx(hardware_idx)
-            hardware_suggestion = cpu_suggestion, mem_suggestion
-            err_msg = f"Something went wrong: sugested cpu or memory < 1: ({hardware_suggestion})"
-            assert cpu_suggestion >= 1 and mem_suggestion >= 1, err_msg
+            hardware_suggestion = HardwareManager.spec_from_hardware_idx(hardware_idx)
+            sanity_check(hardware_suggestion)
             return hardware_suggestion
 
         # Exploitation
@@ -176,24 +192,36 @@ class BanditWare():
             # find the hardware with the best average runtime across features
             runtimes_by_hardware = {h:[] for h in self._hardwares}
             unique_feature_groups = self._historical_data.groupby(self.feature_cols)
-            for feature_vals, features_df in unique_feature_groups:
+            for feature_set, features_df in unique_feature_groups:
                 for hardware, hardware_df in features_df.groupby("hardware"):
                     runtimes_by_hardware[hardware].append(hardware_df['runtime'].mean())
             avg_runtimes_by_hardware = {h:sum(runtimes)/len(runtimes) for h, runtimes in runtimes_by_hardware.items()}
         else:
-            avg_runtimes_by_hardware = {}
-            # find all rows where features match the given features
-            df_features = self._historical_data[self.feature_cols]
-            mask = df_features.eq(features).all(axis=1)
-            df = self._historical_data[mask]
-            for hardware, hardware_df in df.groupby("hardware"):
-                avg_runtimes_by_hardware[hardware] = hardware_df['runtime'].mean()
-        best_hardware = self._get_best_hardware(avg_runtimes_by_hardware, tolerance_ratio=tolerance_ratio, tolerance_seconds=tolerance_seconds)
-        cpu_suggestion, mem_suggestion = HardwareManager.spec_from_hardware_idx(best_hardware)
+            avg_runtimes_by_hardware = self._get_hardware_avg_runtimes(
+                    features, self._hardwares, self._historical_data)
+            # Handle if no rows match the given feature set
+            no_matching_features = all(np.isnan(runtime) for runtime in avg_runtimes_by_hardware)
+            if no_matching_features:
+                if smart_suggest is None:
+                    smart_suggest = len(self._historical_data) < self.SMART_SUGGEST_CUTOFF_SIZE
+                if not smart_suggest:
+                    # No smart_suggest -> use most common hardware
+                    best_hardware_idx = self._historical_data["hardware"].mode().iloc[0]
+                    hardware_suggestion = HardwareManager.spec_from_hardware_idx(best_hardware_idx)
+                    sanity_check(hardware_suggestion)
+                    return hardware_suggestion
+                # smart_suggest -> use gower distance to find most similar feature row
+                print("in smart suggest!")
+                target_row = pd.DataFrame(features, columns=self.feature_cols)
+                feature_matrix = self._historical_data[self.feature_cols]
+                closest_row_index = gower.gower_top_n(target_row, feature_matrix, n=1)['index'][0]
+                closest_features = self._historical_data[self.feature_cols].iloc[closest_row_index]
+                runtimes_by_hardware = self._get_hardware_avg_runtimes(
+                    closest_features, self._hardwares, self._historical_data)
 
-        hardware_suggestion = cpu_suggestion, mem_suggestion
-        err_msg = f"Something went wrong: sugested cpu or memory < 1: ({hardware_suggestion})"
-        assert cpu_suggestion >= 1 and mem_suggestion >= 1, err_msg
+        best_hardware_idx = self._get_best_hardware(avg_runtimes_by_hardware, tolerance_ratio=tolerance_ratio, tolerance_seconds=tolerance_seconds)
+        hardware_suggestion = HardwareManager.spec_from_hardware_idx(best_hardware_idx)
+        sanity_check(hardware_suggestion)
         return hardware_suggestion
 
     def train(self):
@@ -216,7 +244,7 @@ class BanditWare():
         save_data["hardware"] = save_data["hardware"].apply(HardwareManager.get_hardware)
         if not self._save_dir.exists():
             self._save_dir.mkdir()
-        save_data.to_csv(self._save_dir.joinpath(self.DATA_FILE_NAME), index=False)
+        save_data.to_csv(self._save_dir.joinpath(self.SAVE_FILE_NAME), index=False)
 
     def test_accuracy(
             self,
@@ -445,12 +473,13 @@ class BanditWare():
     def _init_save_dir(self, save_dir:Union[pathlib.Path,str,None]) -> pathlib.Path:
         """Returns the directory to save results into"""
         this_dir = pathlib.Path(__file__).resolve().parent
-        final_save_dir = this_dir if save_dir is None else pathlib.Path(save_dir)
+        default_dir = this_dir.joinpath(self.DEFAULT_SAVE_DIR)
+        final_save_dir = default_dir if save_dir is None else pathlib.Path(save_dir)
         return final_save_dir
 
     def _init_data(self, data=None) -> pd.DataFrame:
         """Loads in the preprocessed data and updates the hardware settings"""
-        save_file = self._save_dir.joinpath(self.DATA_FILE_NAME)
+        save_file = self._save_dir.joinpath(self.SAVE_FILE_NAME)
         # handle case of no data
         if not save_file.exists() and data is None:
             df = pd.DataFrame()
@@ -458,6 +487,7 @@ class BanditWare():
         # get data
         full_data = data.copy() if data is not None else pd.read_csv(save_file)
         HardwareManager.init_manager(full_data)
+        self._hardwares = [h for h in range(HardwareManager.num_hardwares)]
         # Replace the hardware name with an integer identifier in hardware manager
         full_data["hardware"] = full_data["hardware"].apply(lambda x: int(HardwareManager.get_hardware_idx(x)))
         return full_data
