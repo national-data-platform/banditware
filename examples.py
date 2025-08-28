@@ -6,6 +6,33 @@ from banditware import BanditWare
 
 np.random.seed(42)
 
+def main():
+    # bp3d_data = preprocess(base_path="data/bp3d_data")
+    # matmul_data = preprocess(data_file="data/matmul.csv")
+    bp3d_data = pd.read_csv("preprocessed_data/bp3d.csv")
+    matmul_data = pd.read_csv("preprocessed_data/matmul.csv")
+
+    matmul_feature_cols = ["size", "sparsity", "min", "max"]
+    all_bp3d_feature_cols = ["area", "canopy_moisture", "run_max_mem_rss_bytes",
+                             "sim_time","surface_moisture","wind_direction","wind_speed"]
+    bp3d_subset_features = ["area", "canopy_moisture","wind_direction","wind_speed"]
+    # test_accuracy(bp3d_data, feature_cols=bp3d_subset_features, model_choice=Model.RANDOM_FOREST)
+    # from_nothing(bp3d_data, bp3d_subset_features, Model.LINEAR_REGRESSION)
+
+    test_accuracy(
+        matmul_data,
+        feature_cols=matmul_feature_cols,
+        model_choice=Model.DECISION_TREE
+        )
+    from_nothing(
+        matmul_data,
+        feature_cols=matmul_feature_cols,
+        model_choice=Model.RANDOM_FOREST,
+        features=[12_500, 0.0, 1, 10000],
+        prohibit_exploration=True
+        )
+
+
 def from_nothing(full_data, feature_cols, model_choice, features=None, prohibit_exploration=False):
     """
     Represents General NDP Workflow: 
@@ -56,32 +83,6 @@ def test_accuracy(data, feature_cols, model_choice):
         model_choice = model_choice
     )
     bw.test_accuracy(model_choice=model_choice, plot_runtime_predictions=False)
-
-def main():
-    # bp3d_data = preprocess(base_path="data/bp3d_data")
-    # matmul_data = preprocess(data_file="data/matmul.csv")
-    # 
-    bp3d_data = pd.read_csv("preprocessed_data/bp3d.csv")
-    matmul_data = pd.read_csv("preprocessed_data/matmul.csv")
-
-    matmul_feature_cols = ["size", "sparsity", "min", "max"]
-    all_bp3d_feature_cols = ["area", "canopy_moisture", "run_max_mem_rss_bytes",
-                             "sim_time","surface_moisture","wind_direction","wind_speed"]
-    bp3d_subset_features = ["area", "canopy_moisture","wind_direction","wind_speed"]
-    # test_accuracy(bp3d_data, feature_cols=bp3d_subset_features, model_choice=Model.RANDOM_FOREST)
-    # from_nothing(bp3d_data, bp3d_subset_features, Model.LINEAR_REGRESSION)
-    test_accuracy(
-        matmul_data,
-        feature_cols=matmul_feature_cols,
-        model_choice=Model.DECISION_TREE
-        )
-    from_nothing(
-        matmul_data, 
-        feature_cols=matmul_feature_cols,
-        model_choice=Model.RANDOM_FOREST,
-        features=[12_500, 0.0, 1, 10000],
-        prohibit_exploration=True
-        )
 
 if __name__ == "__main__":
     main()
