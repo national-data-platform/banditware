@@ -31,6 +31,16 @@ def main():
         features=[12_500, 0.0, 1, 10000],
         prohibit_exploration=True
         )
+    change_application(
+        data1=bp3d_data,
+        features1=bp3d_subset_features,
+        save_dir1="./bp3d",
+        model_choice1=Model.BAYESIAN_RIDGE,
+        data2=matmul_data,
+        features2=matmul_feature_cols,
+        save_dir2="./matmul",
+        model_choice2=Model.DECISION_TREE,
+    )
 
 
 def from_nothing(full_data, feature_cols, model_choice, features=None, prohibit_exploration=False):
@@ -39,7 +49,7 @@ def from_nothing(full_data, feature_cols, model_choice, features=None, prohibit_
         * User start with no historical data and gets a hardware suggestion
         * User continuosly more historical data and gets hardware suggestions over time
     """
-    print("Starting from nothing then adding training data")
+    print_title("Starting from nothing then adding training data")
     data = full_data.sample(frac=1, replace=False)
     data = data.reset_index(drop=True)
     one_row = data.iloc[[0]]
@@ -72,6 +82,7 @@ def test_accuracy(data, feature_cols, model_choice):
     `bw.test_accuracy()` Uses newly trained models (only trained on the subset),
     even if `bw` is already trained.
     """
+    print_title("Testing Accuracy")
     save_dir = "./matmul" if "size" in data.columns else "./bp3d"
     bw = BanditWare(
         data = data,
@@ -83,6 +94,26 @@ def test_accuracy(data, feature_cols, model_choice):
         model_choice = model_choice
     )
     bw.test_accuracy(model_choice=model_choice, plot_runtime_predictions=False)
+
+def change_application(data1, features1, save_dir1, model_choice1,
+                       data2, features2, save_dir2, model_choice2):
+    """
+    Shows BanditWare's ability to change applications. 
+    Tests accuracy on the first application, then switches to a second application.
+    """
+    print_title("Demonstrating Changing applications")
+    print("BurnPro3D")
+    bw = BanditWare(data=data1,
+                    feature_cols=features1,
+                    save_dir=save_dir1,
+                    model_choice=model_choice1)
+    bw.test_accuracy()
+    print("\nMatrix Multiplication")
+    bw.change_application(data2, save_dir2, features2, model_choice2)
+    bw.test_accuracy()
+
+def print_title(title):
+    print("\n", "="*50, title, "="*50, "", sep="\n")
 
 if __name__ == "__main__":
     main()
