@@ -14,7 +14,9 @@ import plotly.io as pio
 from models import Model, ModelInterface
 # plotly has a bug where the first time a graph is saved as a pdf, there is a loading message
 # that gets integrated into the pdf directly. setting mathjax to None bypasses that bug.
-pio.kaleido.scope.mathjax = None
+# Sometimes, it does not recognize pio.kaleido.scope.
+if pio.kaleido.scope is not None:
+    pio.kaleido.scope.mathjax = None
 
 from hardware_manager import HardwareManager
 
