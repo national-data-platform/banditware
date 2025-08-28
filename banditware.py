@@ -4,7 +4,7 @@ import random
 import time
 import pathlib
 import argparse
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Tuple, Union, Any
 import gower
 import numpy as np
 import pandas as pd
@@ -51,20 +51,25 @@ class BanditWare:
                  data:Union[pd.DataFrame,None] = None,
                  feature_cols:Union[List[str],None] = None,
                  save_dir:Union[pathlib.Path,str,None] = None,
+                 model_choice:Union[Model,str] = Model.LINEAR_REGRESSION,
+                 model_params:Union[Dict[str, Any], None] = None,
                  plot_motivation:bool = False,
                  epsilon_start:float = DEFAULT_EPSILON_START,
                  epsilon_decay:float = DEFAULT_EPSILON_DECAY,
                  epsilon_min:float = DEFAULT_EPSILON_MIN,
-                 model_choice:Union[Model,str] = Model.LINEAR_REGRESSION,
-                 **model_params):
+                 ):
 
         # ---- private member variables ----
 
         self._save_dir: pathlib.Path = self._init_save_dir(save_dir)
         self._historical_data = self._init_data(data)
         self._hardwares = list(range(HardwareManager.num_hardwares))
+        # model selection information. Potentially changes when `reset_models` is called
+        self._model_choice: Model = self._resolve_model_choice(model_choice)
+        self._model_params:Dict[str, Any] = {} if model_params is None else model_params.copy()
+        # model instances: the actual models (one per hardware) that predict runtime from features
         self._model_instances: Dict[int, ModelInterface] = {}
-        self.reset_models(model_choice, **model_params)
+        self.reset_models(self._model_choice, self._model_params)
         # whether BanditWare has fully trained on the historical data
         self._fully_trained: bool = False
         # Exploration/exploitation for `suggest_hardware()`:
@@ -255,7 +260,7 @@ class BanditWare:
             ignore_incomplete_feature_rows: bool = False,
             plot_runtime_predictions: bool = False,
             model_choice: Union[str, Model, None] = None,
-            **model_params) -> Dict[str,float]:
+            model_params: Union[Dict[str,Any], None] = None) -> Dict[str,float]:
         """
         Splits the data into train and test data, then trains and tests Banditware on that split.
         Assumes that feature_cols and hardware in `data` are the same as BanditWare's current state.
@@ -277,8 +282,9 @@ class BanditWare:
             ignore_incomplete_feature_rows: whether to ignore or include feature rows that haven't been run on all hardware options in the accuracy calculation.
                 * This impacts accuracy. If the features have not been run on a hardware, that hardware will not be listed as the truth "correct answer".
             model_choice (str | Models | None): the choice of model to use, by name or enum
-                * defualt is linear regression
-            **model_params: any hyperparameters the underlying models should take in
+                * defualt is whatever model_choice BanditWare is currently using (most recent input to `reset_models` or whatever BanditWare was initialized with - default linear regression)
+            model_params: any hyperparameters the underlying models should take in
+                * defualt is whatever model_params BanditWare is currently using (most recent input to `reset_models` or whatever BanditWare was initialized with - default None)
         Returns:
             stats_dict: a dictionary with "accuracy", "rmse" from testing, as well as "train_time" and "test_time" for how long it took to train and test on the given dataset.
         Raises:
@@ -295,8 +301,10 @@ class BanditWare:
         start_time = time.time()
         
         # train BanditWare on the train data using new models (not updating self._model_instances)
-        model = self._resolve_model_choice(model_choice)
+        model = self._model_choice if model_choice is None else self._resolve_model_choice(model_choice)
+        model_params = self._model_params if model_params is None else model_params.copy()
         models_by_hardware:Dict[int, ModelInterface] = {h: model.create(**model_params) for h in self._hardwares}
+
         train_data_by_hardware = train_data.groupby("hardware")
         for h, df in train_data_by_hardware:
             features = df[self.feature_cols].to_numpy()
@@ -320,7 +328,6 @@ class BanditWare:
             tolerance_seconds=tolerance_seconds,
             ignore_incomplete_feature_rows=ignore_incomplete_feature_rows)
 
-       
         testing_time = time.time() - train_stop_time
         training_time = train_stop_time - start_time
         
@@ -351,6 +358,7 @@ class BanditWare:
         if new_feature_cols is not None:
             cleaned_feature_cols = [col for col in new_feature_cols if col not in ['runtime', 'hardware']]
             self.feature_cols = cleaned_feature_cols
+            self.reset_models()
             return
 
         if self._historical_data is None:
@@ -359,41 +367,54 @@ class BanditWare:
         
         self.feature_cols = [
             col for col in self._historical_data.columns if col not in ["runtime", "hardware"]]
+        self.reset_models()
    
-    def reset_models(self, model_choice: Union[str, Model, None] = None, **model_params) -> None:
+    def reset_models(self, model_choice: Union[str, Model, None] = None, model_params:Union[Dict[str, Any], None] = None) -> None:
         """
         Set the models to be used for BanditWare's runtime prediction of each hardware.
         Sets self._model_instances
         Parameters:
             model_choice (str | Model | None): the choice of model to use, by name or enum
-                * defualt is linear regression
-            **model_params: any hyperparameters the underlying models should take in
+                * Defualt is most recent model_choice from calling `reset_models` or whatever model_choice BanditWare was created with (default linear regression)
+            model_params (Dict[str,Any] | None ): any hyperparameters the underlying models should take in.
+                * Default is most recent model_params from calling `reset_models` or whatever model_params BanditWare was created with (default None)
+                * Example (assuming model_choice is Model.LINEAR_REGRESSION): {"fit_intercept":True, "n_jobs":2, "tol":1e-5}
         Raises:
             TypeError: if model_choice is of the wrong type
             ValueError: if model_choice is a string that is not one of the model names
         """
+        if model_choice is None:
+            model_choice = self._model_choice
         model = self._resolve_model_choice(model_choice)
+        model_params = self._model_params if model_params is None else model_params.copy()
         self._model_instances = {h: model.create(**model_params) for h in self._hardwares}
+        self._model_choice = model
+        self._model_params = model_params.copy()
+        self._fully_trained = False
 
     def change_application(
             self, new_data:pd.DataFrame, new_save_dir:Union[str,pathlib.Path],
-            feature_cols:Union[List[str],None]=None, model_choice:Union[Model,str,None] = None,
-            **model_params):
+            feature_cols:Union[List[str],None] = None, model_choice:Union[Model,str,None] = None,
+            model_params:Union[Dict[str,Any],None] = None):
         """
         Changes the application that BanditWare is predicting and saves the old application's data.
         Parameters:
             new_data: application's historical data
+            new_save_dir: folder path to save the new application's data
             feature_cols: feature columns of the application used to predict runtime
                 * default is every column except 'runtime' and 'hardware'
             model_choice: which type of ML model to use (from the `Model` enum)
                 * default is Model.LINEAR_REGRESSION
-            **model_params: any hyperparameters the underlying models should take in
+            model_params: any hyperparameters the underlying models should take in
+                * default is None
         """
         self.save_data()
         self._init_save_dir(new_save_dir)
         self._historical_data = self._init_data(new_data)
         self.reset_feature_cols(feature_cols)
-        self.reset_models(model_choice, **model_params)
+        new_model_choice = model_choice if model_choice is not None else Model.LINEAR_REGRESSION
+        new_model_params = model_params if model_params is not None else {}
+        self.reset_models(new_model_choice, new_model_params)
 
     def plot_runtime_predictions(self, data:Union[pd.DataFrame, None] = None,
                                  model_instances:Union[None, Dict[int,ModelInterface]] = None):
@@ -422,7 +443,7 @@ class BanditWare:
         runtime_pred_uncertainty = {h: 0 for h in self._hardwares}
         for hardware_idx in self._hardwares:
             data_portion = data[data["hardware"]==hardware_idx]
-            X = pd.DataFrame(data=data_portion[feature_col], columns=["area"]).to_numpy()
+            X = pd.DataFrame(data=data_portion[feature_col], columns=[feature_col]).to_numpy()
             pred_runtimes = model_instances[hardware_idx].predict(X)
             actual_runtimes = data_portion["runtime"].to_numpy()
             pred_std_error = np.std(pred_runtimes - actual_runtimes)
@@ -487,7 +508,11 @@ class BanditWare:
         # get data
         full_data = data.copy() if data is not None else pd.read_csv(save_file)
         HardwareManager.init_manager(full_data)
-        self._hardwares = [h for h in range(HardwareManager.num_hardwares)]
+        self._hardwares = list(range(HardwareManager.num_hardwares))
+        # If hardwares have changed, update model instances 
+        if hasattr(self, '_model_instances'):  # _model_instances does not exist until __init__ is done
+            if set(self._hardwares) != set(self._model_instances.keys()):
+                self.reset_models()
         # Replace the hardware name with an integer identifier in hardware manager
         full_data["hardware"] = full_data["hardware"].apply(lambda x: int(HardwareManager.get_hardware_idx(x)))
         return full_data
@@ -499,7 +524,10 @@ class BanditWare:
             model_choice (str | Models | None): the choice of model to use, by name or enum
                 * defualt is linear regression
         Returns:
-            the correct model Enum
+            model_enum (Model): the correct model enum
+        Raises:
+            TypeError: if model_choice is of the wrong type
+            ValueError: if model_choice is a string that is not one of the model names
         """
         if model_choice is None:
             model_choice = Model.LINEAR_REGRESSION
