@@ -451,22 +451,24 @@ class BanditWare:
         
         # format data to be plotted for each hardware
         for hardware_idx in self._hardwares:
+            hardware_str = HardwareManager.get_hardware(hardware_idx)
+            hardware_info = f"{hardware_idx} ({hardware_str})"
             for x in data[feature_col].unique():
                 y_pred = self._predict_runtime(model_instances[hardware_idx], x)
                 rows.append({
                     "x": x,
                     "y": y_pred,
                     "mode": "Predicted",
-                    "Hardware": hardware_idx,
+                    "Hardware": hardware_info,
                     "error": runtime_pred_uncertainty[hardware_idx]
                 })
                 y_spread = data[data["hardware"]==hardware_idx]["runtime"]
                 for y in y_spread:
                     rows.append({
-                        "x": x + 30000,
+                        "x": x + 0.01,
                         "y": y,
                         "mode": "Actual",
-                        "Hardware": hardware_idx,
+                        "Hardware": hardware_info,
                         "error": 0
                     })
 
@@ -483,6 +485,7 @@ class BanditWare:
         fig.update_xaxes(title_text=feature_col.capitalize())
         fig.update_yaxes(title_text="Runtime", matches="y")
         fig.show()
+        self._save_dir.mkdir(exist_ok=True)
         fig.write_image(f"{self._save_dir}/runtime_predictions_{feature_col}.pdf")
 
     # ==========================
