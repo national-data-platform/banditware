@@ -507,7 +507,7 @@ class BanditWare:
         )
         title = ""
         if len(feature_cols) > 1:
-            title = "Features:" + ", ".join(feature_cols)
+            title = "Features: " + ", ".join(feature_cols)
             # wrap title text if it's too long
             max_single_graph_title_len = 120  # found from testing on a laptop (arbitrary length)
             max_subgraph_title_len = int(max_single_graph_title_len / len(model_instances))
@@ -517,6 +517,11 @@ class BanditWare:
             title = feature_cols[0].capitalize()
         fig.update_xaxes(title_text=title)
         fig.update_yaxes(title_text="Runtime", matches="y")
+        # Fix sorting of x labels
+        unique_features = df["features"].drop_duplicates().tolist()
+        x_order = [", ".join(str(v) for v in t) for t in sorted(unique_features)]
+        fig.update_xaxes(categoryorder="array", categoryarray=x_order)
+
         if save:
             self._save_dir.mkdir(exist_ok=True)
             features_str = '_'.join(feature_cols)
