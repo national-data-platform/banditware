@@ -297,18 +297,15 @@ def run_sim(n_rounds: int = 100,
     rows_runtime = []
     e = e_start
 
-    unexplored_feature_hardware_pairs = list(product(unique_features, unique_hardware))
-
     # random_feature_choices = rand_feature_choices()
     for i in range(n_rounds):
-        if len(unexplored_feature_hardware_pairs) > 0:
-            # Exploration vs Exploitation
-            features = random.choice(unique_features)
-            if np.random.rand() >= e:
-                hardware = min(unique_hardware, 
-                               key=lambda h: float(predict_one(model_instances[h], features)))
-            else:
-                hardware = random.choice(unique_hardware)
+        # Exploration vs Exploitation
+        features = random.choice(unique_features)
+        if np.random.rand() >= e:
+            hardware = min(unique_hardware, 
+                            key=lambda h: float(predict_one(model_instances[h], features)))
+        else:
+            hardware = random.choice(unique_hardware)
 
         # Sample the runtime of the workflow on the selected features and hardware
         runtime = sample_runtime(features, hardware, df=train_data)
