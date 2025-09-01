@@ -472,7 +472,11 @@ class BanditWare:
                     "error": runtime_pred_uncertainty[hardware_idx],
                     "features": features,
                 })
-                y_spread = data[data["hardware"]==hardware_idx]["runtime"]
+                hardware_data = data[data["hardware"]==hardware_idx]
+                mask = np.logical_and.reduce([
+                    hardware_data[col] == val for col, val in zip(feature_cols, features)
+                ])
+                y_spread = hardware_data[mask]["runtime"]
                 for y in y_spread:
                     rows.append({
                         "x": x_label,
