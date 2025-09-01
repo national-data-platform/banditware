@@ -667,6 +667,13 @@ def main():
     data_file = savedir.joinpath("data/data.csv")
     df = pd.read_csv(data_file)
     HardwareManager.init_manager(df)
+    # extra hardcoded preprocessing for BP3D. banditware.py does not have to do this, but cb.py needs features to be enumerated across all hardwares -> areas must be shared across hardwares.
+    if 'area' in df.columns:
+        shared_areas = [1053216.0, 1854216.0, 1369900.0, 828144.0, 2543220.0]
+        df = df[df['area'].isin(shared_areas)]
+    df = df.reset_index(drop=True)
+    
+    
 
 
     # tolerance_ratio is a float >= 0 to represent the amount of slowdown allowed for a less resource intensive hardware

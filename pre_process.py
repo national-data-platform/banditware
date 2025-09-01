@@ -95,13 +95,8 @@ def clean_data(data: pd.DataFrame) -> pd.DataFrame:
     data = data.loc[:, ~data.columns.str.contains('^Unnamed')]
     # replace NaN with 0    
     data = data.fillna(0)
-
-    # have to do this for now
-    if 'area' in data.columns:
-        shared_areas = [1053216.0, 1854216.0, 1369900.0, 828144.0, 2543220.0]
-        data = data[data['area'].isin(shared_areas)]
     data = data.reset_index(drop=True)
-    
+
     return data
 
 def preprocess(base_path:Union[str,None]=None, data_file:Union[str,None]=None) -> pd.DataFrame:
