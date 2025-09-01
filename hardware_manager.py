@@ -21,12 +21,12 @@ class HardwareManager:
         cls.num_hardwares = len(cls._hardware_map)
 
     @staticmethod
-    def _load_hardware_map_and_specs(df):
+    def _load_hardware_map_and_specs(df:pd.DataFrame):
         """Load hardware mappings and specs from the data.csv file."""
         hardware_map: Dict[int, str] = {}
         specs_map: Dict[str, Tuple[int, int]] = {}
         try:
-            unique_hardware = df["hardware"].unique()  # Get unique hardware values
+            unique_hardware = df.sort_values(by="hardware")["hardware"].unique()  # Get unique hardware values
             hardware_names = {value: index for index, value in enumerate(unique_hardware)}
             for _, row in df.iterrows():
                 hardware_value = row["hardware"]  # e.g., 8_20, 12_20, etc.
