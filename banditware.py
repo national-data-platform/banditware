@@ -501,7 +501,7 @@ class BanditWare:
             symbol="mode",
             hover_data={"features": True, "x": False},
             color_discrete_map={
-                "Predicted": "#2E62E5",
+                "Predicted": "rgba(46, 98, 229, 0.5)",
                 "Actual": "orange",
             }
         )
