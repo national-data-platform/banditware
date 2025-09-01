@@ -503,7 +503,12 @@ class BanditWare:
         )
         title = ""
         if len(feature_cols) > 1:
-            title = "Features: " + ", ".join(feature_cols)
+            title = "Features:" + ", ".join(feature_cols)
+            # wrap title text if it's too long
+            max_single_graph_title_len = 120  # found from testing on a laptop (arbitrary length)
+            max_subgraph_title_len = int(max_single_graph_title_len / len(model_instances))
+            if len(title) > max_subgraph_title_len:
+                title = "Features: " + ",<br>".join(feature_cols)
         else:
             title = feature_cols[0].capitalize()
         fig.update_xaxes(title_text=title)
