@@ -89,7 +89,6 @@ def test_accuracy(data, feature_cols, model_choice):
         feature_cols = feature_cols,
         # feature_cols = all_bp3d_feature_cols,
         save_dir = save_dir,
-        plot_motivation = False,
         # model_choice = Model.LINEAR_REGRESSION
         model_choice = model_choice
     )

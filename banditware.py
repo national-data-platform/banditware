@@ -55,7 +55,6 @@ class BanditWare:
                  save_dir:Union[pathlib.Path,str,None] = None,
                  model_choice:Union[Model,str] = Model.LINEAR_REGRESSION,
                  model_params:Union[Dict[str, Any], None] = None,
-                 plot_motivation:bool = False,
                  epsilon_start:float = DEFAULT_EPSILON_START,
                  epsilon_decay:float = DEFAULT_EPSILON_DECAY,
                  epsilon_min:float = DEFAULT_EPSILON_MIN,
@@ -83,7 +82,6 @@ class BanditWare:
         # ---- public member variables ----
 
         self.historical_data_csv: str = str(save_dir) + "/bw_data.csv"
-        self.plot_motivation: bool = plot_motivation
         self.feature_cols: List[str] = feature_cols or []
         self.reset_feature_cols(feature_cols)
 
@@ -705,7 +703,7 @@ class BanditWare:
             best_hardwares.append(best_hardware)
         
         if warn_missing_data:
-            print("Warning: Some features are not represented across all hardwares; Best hardware prediction may be inaccurate.")
+            print("Warning: Some feature sets are not represented across all hardwares; Best hardware prediction may be inaccurate.")
         return best_hardwares
 
     def _get_models_accuracy(
@@ -737,29 +735,42 @@ class BanditWare:
         hardware_prediction_accuracy = np.mean(prediction_results)
         return hardware_prediction_accuracy
 
-    def _plot_motivation(self, df: pd.DataFrame):
-        assert len(self.feature_cols) == 1, "`_plot_predictions` can only be called when there is only one feature column."
-        feature_col = self.feature_cols[0]
+    def plot_runtime_spread(
+            self, data: Union[pd.DataFrame,None] = None,
+            feature_col:Union[str,None] = None, save:bool = False):
+        """
+        Plot the spread of all runtimes over the feature column. 
+        Different hardwares are represented as different colors.
+        Parameters:
+            data: the historical data to plot
+                * columns must contain "hardware", "runtime", and feature_col 
+                * Uses BanditWare's initialized historical data if none is given
+            feature_col: the name of the feature column to use
+                * if not specified, BanditWare.feature_cols must be a list of length 1.
+            save: whether to save the figure to the save directory
+        """
+        if data is None:
+            data = self._historical_data
+        data = data.copy()
+        if feature_col is None:
+            err_msg = "Cannot determine which feature column to use; BanditWare.feature_cols must have exactly one element if feature_col is not specified."
+            assert len(self.feature_cols) == 1, err_msg
+            feature_col = self.feature_cols[0]
+        
         # Convert the Names of the hardwares from ints to H0, H1, etc.
-        df["hardware"] = df["hardware"].astype("str")
-        df["hardware"] = df["hardware"].apply(lambda h_idx: f'H{h_idx}')
+        data["hardware"] = data["hardware"].astype("str")
+        data["hardware"] = data["hardware"].apply(lambda h_idx: f'H{h_idx}')
         # Convert Hardware to a categorical type
-        df["hardware"] = df["hardware"].astype("category")
-        # Define custom color mapping for Hardware
-        # color_map = {
-        #     "H0": "#FF6347",  # Tomato
-        #     "H1": "#4682B4",  # SteelBlue
-        #     "H2": "#32CD32",  # LimeGreen
-        #     "H3": "#FFD700",  # Gold
-        # }
+        data["hardware"] = data["hardware"].astype("category")
+
         fig = px.scatter(
-            df,
+            data,
             x=feature_col,
             y="runtime",
             color="hardware",  # Color by Hardware
             template="simple_white",
             opacity=0.8,
-            category_orders={"hardware": df["hardware"].unique().tolist()},
+            category_orders={"hardware": data["hardware"].unique().tolist()},
             # color_discrete_map=color_map
         )
         # Update marker size and add black borders
@@ -773,6 +784,8 @@ class BanditWare:
         # Rename the axes
         fig.update_xaxes(title_text=feature_col.capitalize())
         fig.update_yaxes(title_text="Runtime (s)")
+        if save:
+            fig.write_image(f"{self._save_dir}/runtime_spread_{feature_col}.pdf")
         fig.show()
 
 
@@ -806,7 +819,6 @@ def main():
         data = preprocessed_data,
         feature_cols = ['area', 'canopy_moisture'],
         save_dir = args.savedir or "./bp3d",
-        plot_motivation = args.motivation or False,
         # model_choice = args.model or Model.DECISION_TREE
         model_choice = Model.LINEAR_REGRESSION
     )
