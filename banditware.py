@@ -340,11 +340,7 @@ class BanditWare:
 
         # For debugging: see if the runtime predictions are reasonable on each hardware
         if plot_runtime_predictions:
-            # TODO: make it so it can work with multiple feature cols
-            if len(self.feature_cols) == 1:
-                self.plot_runtime_predictions(test_data, models_by_hardware)
-            else:
-                print("Cannot print runtime predictions if there is more than one feature column.")
+            self.plot_runtime_predictions(data=test_data, model_instances=models_by_hardware, feature_cols=self.feature_cols)
 
         stats_dict = {"accuracy":accuracy, "rmse":rmse, "train_time":training_time, "test_time":testing_time}
         return stats_dict
@@ -416,34 +412,45 @@ class BanditWare:
         new_model_params = model_params if model_params is not None else {}
         self.reset_models(new_model_choice, new_model_params)
 
-    def plot_runtime_predictions(self, data:Union[pd.DataFrame, None] = None,
-                                 model_instances:Union[None, Dict[int,ModelInterface]] = None):
+    def plot_runtime_predictions(
+            self,
+            data:Union[pd.DataFrame, None] = None,
+            model_instances:Union[None, Dict[int,ModelInterface]] = None,
+            feature_cols:Union[List[str], None] = None,
+            save:bool = False):
         """
         Plot the predicted runtime over the feature column for each hardware
         Parameters:
             data: the entire dataset, containing the feature column, hardware, and runtime
+                * if None, uses self._historical_data.
             model_instances: the trained models by hardware index. 
                 * If None, uses self._model_instances
+            feature_cols: the feature columns used to predict runtime
+            
         """
         if data is None:
             data = self._historical_data
+        data = data.copy()
         if model_instances is None:
+            if not self._fully_trained:
+                self.train()
             model_instances = self._model_instances
-        # Assert proper conditions have been met
-        assert len(self.feature_cols) == 1, "`_plot_predictions` can only be called when there is only one feature column."
+
         data_hardwares = set(data['hardware'].unique())
         model_hardwares = set(model_instances.keys())
         hardware_misfit_msg = f"`model_instances` have not been trained on this `data`. The unique hardwares differ: {data_hardwares} vs {model_hardwares}"
         assert data_hardwares == model_hardwares, hardware_misfit_msg
         
-        feature_col = self.feature_cols[0]
+        feature_cols = feature_cols if feature_cols is not None else self.feature_cols
+        bad_cols_msg = f"feature_cols must be in data columns: {list(data.columns)}. feature_cols were: {feature_cols}"
+        assert set(feature_cols).issubset(set(data.columns)), bad_cols_msg
         rows = []
 
         # find the uncertainty of runtime prediction for each hardware
         runtime_pred_uncertainty = {h: 0 for h in self._hardwares}
         for hardware_idx in self._hardwares:
             data_portion = data[data["hardware"]==hardware_idx]
-            X = pd.DataFrame(data=data_portion[feature_col], columns=[feature_col]).to_numpy()
+            X = pd.DataFrame(data=data_portion[feature_cols], columns=feature_cols).to_numpy()
             pred_runtimes = model_instances[hardware_idx].predict(X)
             actual_runtimes = data_portion["runtime"].to_numpy()
             pred_std_error = np.std(pred_runtimes - actual_runtimes)
@@ -453,40 +460,59 @@ class BanditWare:
         for hardware_idx in self._hardwares:
             hardware_str = HardwareManager.get_hardware(hardware_idx)
             hardware_info = f"{hardware_idx} ({hardware_str})"
-            for x in data[feature_col].unique():
-                y_pred = self._predict_runtime(model_instances[hardware_idx], x)
+            unique_feature_sets = data[feature_cols].drop_duplicates().itertuples(index=False, name=None)
+            for features in unique_feature_sets:
+                y_pred = self._predict_runtime(model_instances[hardware_idx], features)
+                x_label = ", ".join(str(f) for f in features)
                 rows.append({
-                    "x": x,
+                    "x": x_label,
                     "y": y_pred,
                     "mode": "Predicted",
                     "Hardware": hardware_info,
-                    "error": runtime_pred_uncertainty[hardware_idx]
+                    "error": runtime_pred_uncertainty[hardware_idx],
+                    "features": features,
                 })
                 y_spread = data[data["hardware"]==hardware_idx]["runtime"]
                 for y in y_spread:
                     rows.append({
-                        "x": x + 0.01,
+                        "x": x_label,
                         "y": y,
                         "mode": "Actual",
                         "Hardware": hardware_info,
-                        "error": 0
+                        "error": 0,
+                        "features": features,
                     })
 
         df = pd.DataFrame(rows)
+        # Sort mode by Actual then Predicted so Predicted bars show up over Actual datapoints 
+        df["mode"] = pd.Categorical(df["mode"], categories=["Actual", "Predicted"], ordered=True)
+        df = df.sort_values(by=["mode", "features"])
+        # Plot
         fig = px.scatter(
             df, x="x", y="y", color="mode",
             facet_col="Hardware",
             template="simple_white",
             error_y="error",
             opacity=0.5,
-            symbol="mode"
+            symbol="mode",
+            hover_data={"features": True, "x": False},
+            color_discrete_map={
+                "Predicted": "#2E62E5",
+                "Actual": "orange",
+            }
         )
-
-        fig.update_xaxes(title_text=feature_col.capitalize())
+        title = ""
+        if len(feature_cols) > 1:
+            title = "Features: " + ", ".join(feature_cols)
+        else:
+            title = feature_cols[0].capitalize()
+        fig.update_xaxes(title_text=title)
         fig.update_yaxes(title_text="Runtime", matches="y")
+        if save:
+            self._save_dir.mkdir(exist_ok=True)
+            features_str = '_'.join(feature_cols)
+            fig.write_image(f"{self._save_dir}/runtime_predictions_{features_str}.pdf")
         fig.show()
-        self._save_dir.mkdir(exist_ok=True)
-        fig.write_image(f"{self._save_dir}/runtime_predictions_{feature_col}.pdf")
 
     # ==========================
     #       PRIVATE METHODS

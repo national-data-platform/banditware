@@ -22,7 +22,8 @@ def main():
     test_accuracy(
         matmul_data,
         feature_cols=matmul_feature_cols,
-        model_choice=Model.DECISION_TREE
+        model_choice=Model.DECISION_TREE,
+        plot_predictions=True
         )
     from_nothing(
         matmul_data,
@@ -76,7 +77,7 @@ def from_nothing(full_data, feature_cols, model_choice, features=None, prohibit_
 
 
 
-def test_accuracy(data, feature_cols, model_choice):
+def test_accuracy(data, feature_cols, model_choice, plot_predictions=False):
     """
     Tests accuracy of BanditWare on a given datasest. 
     `bw.test_accuracy()` Uses newly trained models (only trained on the subset),
@@ -92,7 +93,7 @@ def test_accuracy(data, feature_cols, model_choice):
         # model_choice = Model.LINEAR_REGRESSION
         model_choice = model_choice
     )
-    bw.test_accuracy(model_choice=model_choice, plot_runtime_predictions=False)
+    bw.test_accuracy(model_choice=model_choice, plot_runtime_predictions=plot_predictions)
 
 def change_application(data1, features1, save_dir1, model_choice1,
                        data2, features2, save_dir2, model_choice2):
