@@ -370,7 +370,8 @@ def run_sim(n_rounds: int = 100,
                 #     "Hardware": hardware_idx,
                 #     "error": std_truth[hardware_idx]
                 # })
-                y_spread = train_data[train_data["hardware"]==hardware_idx]["runtime"]
+                hardware_data = train_data[train_data["hardware"]==hardware_idx]
+                y_spread = hardware_data[hardware_data[feature_col]==x]["runtime"]
                 for y in y_spread:
                     rows.append({
                         "x": x + 30000,
@@ -527,7 +528,6 @@ def run(n_sims: int,
     df_sim = pd.concat(dfs)
 
     # assert that rmse is the same for all simulations
-    print([info["rmse"] for info in baseline_infos])
     rmse_full = np.mean([info["rmse"] for info in baseline_infos])
     # assert np.allclose([info["rmse"] for info in baseline_infos], rmse_full)
     # get accuracy of full data
@@ -666,13 +666,12 @@ def main():
     # Initialize HardwareManager with the preprocessed data
     data_file = savedir.joinpath("data/data.csv")
     df = pd.read_csv(data_file)
-    HardwareManager.init_manager(df)
     # extra hardcoded preprocessing for BP3D. banditware.py does not have to do this, but cb.py needs features to be enumerated across all hardwares -> areas must be shared across hardwares.
     if 'area' in df.columns:
         shared_areas = [1053216.0, 1854216.0, 1369900.0, 828144.0, 2543220.0]
         df = df[df['area'].isin(shared_areas)]
-    df = df.reset_index(drop=True)
-    
+    df:pd.DataFrame = df.reset_index(drop=True)
+    HardwareManager.init_manager(df)
     
 
 
