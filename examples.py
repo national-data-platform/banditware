@@ -35,11 +35,11 @@ def main():
     change_application(
         data1=bp3d_data,
         features1=bp3d_subset_features,
-        save_dir1="./bp3d",
+        save_dir1="bp3d",
         model_choice1=Model.BAYESIAN_RIDGE,
         data2=matmul_data,
         features2=matmul_feature_cols,
-        save_dir2="./matmul",
+        save_dir2="matmul",
         model_choice2=Model.DECISION_TREE,
     )
 
@@ -58,7 +58,7 @@ def from_nothing(full_data, feature_cols, model_choice, features=None, prohibit_
     several_rows = data.iloc[3:30]
     rest_of_rows = data.iloc[30:]
     incremental_updates = [one_row, two_rows, several_rows, rest_of_rows]
-    save_dir = "./matmul" if "size" in data.columns else "./bp3d"
+    save_dir = "matmul" if "size" in data.columns else "bp3d"
     
     bw = BanditWare(feature_cols=feature_cols, save_dir=save_dir, model_choice=model_choice)
     
@@ -78,7 +78,7 @@ def test_accuracy(data, feature_cols, model_choice, plot_predictions=False):
     even if `bw` is already trained.
     """
     print_title("Testing Accuracy")
-    save_dir = "./matmul" if "size" in data.columns else "./bp3d"
+    save_dir = "matmul" if "size" in data.columns else "bp3d"
     bw = BanditWare(
         data = data,
         feature_cols = feature_cols,

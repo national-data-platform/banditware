@@ -37,6 +37,7 @@ random.seed(42)
 
 class BanditWare:
     SAVE_FILE_NAME: str = "bw_data.csv"
+    BANDITWARE_DIR: str = "bw_save_data"
     # defaults
     DEFAULT_TOLERANCE_RATIO: float = 0.0
     DEFAULT_TOLERANCE_SECONDS: int = 0
@@ -599,10 +600,17 @@ class BanditWare:
 
     def _init_save_dir(self, save_dir:Union[pathlib.Path,str,None]) -> pathlib.Path:
         """Returns the directory to save results into"""
+        if isinstance(save_dir, pathlib.Path):
+            return save_dir
         this_dir = pathlib.Path(__file__).resolve().parent
-        default_dir = this_dir.joinpath(self.DEFAULT_SAVE_DIR)
-        final_save_dir = default_dir if save_dir is None else pathlib.Path(save_dir)
-        return final_save_dir
+        default_dir = this_dir.joinpath(self.BANDITWARE_DIR, self.DEFAULT_SAVE_DIR)
+        if save_dir is None:
+            return default_dir
+        # There is a specified place the folder should go (./ or ../) -> don't add it to bw directory
+        if isinstance(save_dir, str) and "." in save_dir:
+            return pathlib.Path(save_dir)
+        # put save directory in banditware's save directory
+        return this_dir.joinpath(self.BANDITWARE_DIR, save_dir)
 
     def _init_data(self, data=None) -> pd.DataFrame:
         """Loads in the preprocessed data and updates the hardware settings"""
@@ -917,7 +925,7 @@ def main():
     bw = BanditWare(
         data = preprocessed_data,
         feature_cols = ['area', 'canopy_moisture'],
-        save_dir = args.savedir or "./bp3d",
+        save_dir = args.savedir or "bp3d",
         # model_choice = args.model or Model.DECISION_TREE
         model_choice = Model.LINEAR_REGRESSION
     )
