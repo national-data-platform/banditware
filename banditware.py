@@ -98,7 +98,6 @@ class BanditWare:
             update_saved_data: whether to save the new historical data
             retrain: whether to train the models on the newly added data
         """
-        # TODO: handle if new_data has hardware index instead of "cpu_ram" str in hardware col
         needed_cols = ["runtime"] + self.feature_cols
         # Handle new_data is an incorrectly formatted single row
         if isinstance(new_data, pd.Series) or new_data.shape[1] == 1:
@@ -112,7 +111,9 @@ class BanditWare:
         if len(old_data) == 0:
             full_data = new_data
         else:
+            # get both data's hardware in the form of "cpu_ram" to be able to later re-init hardware manager
             old_data["hardware"] = old_data["hardware"].apply(HardwareManager.get_hardware)
+            new_data["hardware"] = new_data["hardware"].apply(self._coerce_hardware_str)
             full_data = pd.concat([old_data, new_data], ignore_index=True)
         self._historical_data = self._init_data(full_data)
         if update_saved_data:
@@ -837,6 +838,8 @@ class BanditWare:
         hardware_prediction_accuracy = np.mean(prediction_results)
         return hardware_prediction_accuracy
 
+    # helpers for plotting
+
     def _format_sci(self, value: float, precision: int = 2) -> str:
         """
         Get value as a str in scientific notation with n decimal places
@@ -861,6 +864,29 @@ class BanditWare:
 
         return str(value)
 
+    # random helpers
+
+    def _coerce_hardware_str(self, hardware:Union[str,int]) -> str:
+        """
+        Given a hardware index or hardware string, return a hardware string in the form cpu_ram
+        Parameters:
+            hardware: a hardware index as an int or a hardware string
+        Raises:
+            ValueError if a string is incorrectly formatted
+            AssertionError if the hardware is not recognized by the hardware manager
+        """
+        if isinstance(hardware, str):
+            # already formatted as a hardware str
+            if "_" in hardware:
+                return hardware
+            # hardware index -> convert to an int
+            try:
+                hardware = int(hardware)
+            except Exception as e:
+                raise ValueError(f"Invalid hardware: {hardware}") from e
+        # hardware index -> convert to a hardware str
+        hardware_str = HardwareManager.get_hardware(hardware)
+        return hardware_str
 
 def get_parser_args():
     """
