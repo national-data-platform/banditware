@@ -258,9 +258,11 @@ class BanditWare:
             tolerance_seconds: int = 0,
             print_results: bool = True,
             ignore_incomplete_feature_rows: bool = False,
+            calc_truth_from_test: bool = False,
             plot_runtime_predictions: bool = False,
             model_choice: Union[str, Model, None] = None,
-            model_params: Union[Dict[str,Any], None] = None) -> Dict[str,float]:
+            model_params: Union[Dict[str,Any], None] = None,
+            save_file:Union[str, None] = None) -> Dict[str,float]:
         """
         Splits the data into train and test data, then trains and tests Banditware on that split.
         Assumes that feature_cols and hardware in `data` are the same as BanditWare's current state.
@@ -281,6 +283,8 @@ class BanditWare:
             print_results: whether to print accuracy, rmse, training time, and testing time
             ignore_incomplete_feature_rows: whether to ignore or include feature rows that haven't been run on all hardware options in the accuracy calculation.
                 * This impacts accuracy. If the features have not been run on a hardware, that hardware will not be listed as the truth "correct answer".
+            calc_truth_from_test: whether to calculate the "correct best model" for each feature set in the test data using just the test data or the entire data.
+                * With applications that perform similarly across several hardwares, this can significantly impact accuracy. Setting this to False will likely improve accuracy in that case.
             model_choice (str | Models | None): the choice of model to use, by name or enum
                 * defualt is whatever model_choice BanditWare is currently using (most recent input to `reset_models` or whatever BanditWare was initialized with - default linear regression)
             model_params: any hyperparameters the underlying models should take in
@@ -320,10 +324,11 @@ class BanditWare:
         rmse = np.sqrt(mean_squared_error(y_test_true, y_test_pred))
 
         unique_feature_sets = test_data[self.feature_cols].drop_duplicates().to_numpy()
+        truth_dataset = test_data if calc_truth_from_test else full_data
         accuracy = self._get_models_accuracy(
             models=models_by_hardware,
             unique_feature_sets=unique_feature_sets,
-            full_data=full_data,
+            truth_dataset=truth_dataset,
             tolerance_ratio=tolerance_ratio,
             tolerance_seconds=tolerance_seconds,
             ignore_incomplete_feature_rows=ignore_incomplete_feature_rows)
@@ -340,7 +345,7 @@ class BanditWare:
 
         # For debugging: see if the runtime predictions are reasonable on each hardware
         if plot_runtime_predictions:
-            self.plot_runtime_predictions(data=test_data, model_instances=models_by_hardware, feature_cols=self.feature_cols)
+            self.plot_runtime_predictions(data=test_data, model_instances=models_by_hardware, feature_cols=self.feature_cols, save=True, save_title=save_file)
 
         stats_dict = {"accuracy":accuracy, "rmse":rmse, "train_time":training_time, "test_time":testing_time}
         return stats_dict
@@ -417,7 +422,8 @@ class BanditWare:
             data:Union[pd.DataFrame, None] = None,
             model_instances:Union[None, Dict[int,ModelInterface]] = None,
             feature_cols:Union[List[str], None] = None,
-            save:bool = False):
+            save:bool = False,
+            save_title:Union[str,None]=None):
         """
         Plot the predicted runtime over the feature column for each hardware
         Parameters:
@@ -426,7 +432,9 @@ class BanditWare:
             model_instances: the trained models by hardware index. 
                 * If None, uses self._model_instances
             feature_cols: the feature columns used to predict runtime
-            
+            save: whether to save the plot
+            save_file: the name of the file to save
+                * if None, uses a default file name based on the given featuers
         """
         if data is None:
             data = self._historical_data
@@ -463,7 +471,7 @@ class BanditWare:
             unique_feature_sets = data[feature_cols].drop_duplicates().itertuples(index=False, name=None)
             for features in unique_feature_sets:
                 y_pred = self._predict_runtime(model_instances[hardware_idx], features)
-                x_label = ", ".join(str(f) for f in features)
+                x_label = ", ".join(self._format_label(f) for f in features)
                 rows.append({
                     "x": x_label,
                     "y": y_pred,
@@ -519,13 +527,67 @@ class BanditWare:
         fig.update_yaxes(title_text="Runtime", matches="y")
         # Fix sorting of x labels
         unique_features = df["features"].drop_duplicates().tolist()
-        x_order = [", ".join(str(v) for v in t) for t in sorted(unique_features)]
+        x_order = [", ".join(self._format_label(val) for val in feature_set) for feature_set in sorted(unique_features)]
         fig.update_xaxes(categoryorder="array", categoryarray=x_order)
 
         if save:
             self._save_dir.mkdir(exist_ok=True)
             features_str = '_'.join(feature_cols)
-            fig.write_image(f"{self._save_dir}/runtime_predictions_{features_str}.pdf")
+            save_file = save_title or f"runtime_predictions_{features_str}.pdf"
+            fig.write_image(f"{self._save_dir}/{save_file}")
+        fig.show()
+
+    def plot_runtime_spread(
+            self, data: Union[pd.DataFrame,None] = None,
+            feature_col:Union[str,None] = None, save:bool = False):
+        """
+        Plot the spread of all runtimes over the feature column. 
+        Different hardwares are represented as different colors.
+        Parameters:
+            data: the historical data to plot
+                * columns must contain "hardware", "runtime", and feature_col 
+                * Uses BanditWare's initialized historical data if none is given
+            feature_col: the name of the feature column to use
+                * if not specified, BanditWare.feature_cols must be a list of length 1.
+            save: whether to save the figure to the save directory
+        """
+        if data is None:
+            data = self._historical_data
+        data = data.copy()
+        if feature_col is None:
+            err_msg = "Cannot determine which feature column to use; BanditWare.feature_cols must have exactly one element if feature_col is not specified."
+            assert len(self.feature_cols) == 1, err_msg
+            feature_col = self.feature_cols[0]
+        
+        # Convert the Names of the hardwares from ints to H0, H1, etc.
+        data["hardware"] = data["hardware"].astype("str")
+        data["hardware"] = data["hardware"].apply(lambda h_idx: f'H{h_idx}')
+        # Convert Hardware to a categorical type
+        data["hardware"] = data["hardware"].astype("category")
+
+        fig = px.scatter(
+            data,
+            x=feature_col,
+            y="runtime",
+            color="hardware",  # Color by Hardware
+            template="simple_white",
+            opacity=0.8,
+            category_orders={"hardware": data["hardware"].unique().tolist()},
+            # color_discrete_map=color_map
+        )
+        # Update marker size and add black borders
+        fig.update_traces(marker=dict(
+            size=8,                     # Increase marker size (adjust as needed)
+            line=dict(
+                width=2,                 # Width of the border
+                color="black"            # Border color (black)
+            )
+        ))
+        # Rename the axes
+        fig.update_xaxes(title_text=feature_col.capitalize())
+        fig.update_yaxes(title_text="Runtime (s)")
+        if save:
+            fig.write_image(f"{self._save_dir}/runtime_spread_{feature_col}.pdf")
         fig.show()
 
     # ==========================
@@ -748,12 +810,12 @@ class BanditWare:
 
     def _get_models_accuracy(
             self, models: Dict[int, ModelInterface], unique_feature_sets:np.ndarray,
-            full_data:pd.DataFrame, tolerance_ratio:Union[float, None], tolerance_seconds:int, ignore_incomplete_feature_rows:bool=False) -> float:
+            truth_dataset:pd.DataFrame, tolerance_ratio:Union[float, None], tolerance_seconds:int, ignore_incomplete_feature_rows:bool=False) -> float:
         """
         Get the accuracy of the model on the test data - how often does it predict the best hardware.
         """
         # use get_best_hardware to get the ground truth for the test values
-        truth_hardwares = self._best_hardwares_truth(unique_feature_sets, full_data, tolerance_ratio=tolerance_ratio, tolerance_seconds=tolerance_seconds, void_missing_hardwares=ignore_incomplete_feature_rows)
+        truth_hardwares = self._best_hardwares_truth(unique_feature_sets, truth_dataset, tolerance_ratio=tolerance_ratio, tolerance_seconds=tolerance_seconds, void_missing_hardwares=ignore_incomplete_feature_rows)
         
         # use the model to predict the best hardware
         predictions = []
@@ -775,58 +837,29 @@ class BanditWare:
         hardware_prediction_accuracy = np.mean(prediction_results)
         return hardware_prediction_accuracy
 
-    def plot_runtime_spread(
-            self, data: Union[pd.DataFrame,None] = None,
-            feature_col:Union[str,None] = None, save:bool = False):
+    def _format_sci(self, value: float, precision: int = 2) -> str:
         """
-        Plot the spread of all runtimes over the feature column. 
-        Different hardwares are represented as different colors.
-        Parameters:
-            data: the historical data to plot
-                * columns must contain "hardware", "runtime", and feature_col 
-                * Uses BanditWare's initialized historical data if none is given
-            feature_col: the name of the feature column to use
-                * if not specified, BanditWare.feature_cols must be a list of length 1.
-            save: whether to save the figure to the save directory
+        Get value as a str in scientific notation with n decimal places
         """
-        if data is None:
-            data = self._historical_data
-        data = data.copy()
-        if feature_col is None:
-            err_msg = "Cannot determine which feature column to use; BanditWare.feature_cols must have exactly one element if feature_col is not specified."
-            assert len(self.feature_cols) == 1, err_msg
-            feature_col = self.feature_cols[0]
-        
-        # Convert the Names of the hardwares from ints to H0, H1, etc.
-        data["hardware"] = data["hardware"].astype("str")
-        data["hardware"] = data["hardware"].apply(lambda h_idx: f'H{h_idx}')
-        # Convert Hardware to a categorical type
-        data["hardware"] = data["hardware"].astype("category")
+        s = f"{value:.{precision}e}" # e.g. "1.23e+03"
+        prefix, exp = s.split("e")
+        exp = int(exp)  # convert to int to drop + and leading zeros
+        return f"{prefix}e{exp}"
+    
+    def _format_decimal(self, value: float, max_digits: int = 2) -> str:
+        formatted = f"{value:.{max_digits}f}"
+        # Strip trailing zeros and decimal point if not needed
+        if "." in formatted:
+            formatted = formatted.rstrip("0").rstrip(".")
+        return formatted
 
-        fig = px.scatter(
-            data,
-            x=feature_col,
-            y="runtime",
-            color="hardware",  # Color by Hardware
-            template="simple_white",
-            opacity=0.8,
-            category_orders={"hardware": data["hardware"].unique().tolist()},
-            # color_discrete_map=color_map
-        )
-        # Update marker size and add black borders
-        fig.update_traces(marker=dict(
-            size=8,                     # Increase marker size (adjust as needed)
-            line=dict(
-                width=2,                 # Width of the border
-                color="black"            # Border color (black)
-            )
-        ))
-        # Rename the axes
-        fig.update_xaxes(title_text=feature_col.capitalize())
-        fig.update_yaxes(title_text="Runtime (s)")
-        if save:
-            fig.write_image(f"{self._save_dir}/runtime_spread_{feature_col}.pdf")
-        fig.show()
+    def _format_label(self, value: Union[float, int, str]) -> str:
+        if isinstance(value, (int, float)):
+            if value >= 1e3:
+                return self._format_sci(value, precision=2)
+            return self._format_decimal(value, max_digits=2)
+
+        return str(value)
 
 
 def get_parser_args():
