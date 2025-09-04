@@ -48,7 +48,7 @@ def from_nothing(full_data, feature_cols, model_choice, features=None, prohibit_
     """
     Represents General NDP Workflow: 
         * User start with no historical data and gets a hardware suggestion
-        * User continuosly more historical data and gets hardware suggestions over time
+        * User continuosly creates more historical data and gets hardware suggestions over time
     """
     print_title("Starting from nothing then adding training data")
     data = full_data.sample(frac=1, replace=False)
@@ -69,12 +69,6 @@ def from_nothing(full_data, feature_cols, model_choice, features=None, prohibit_
         suggested_hardware = bw.suggest_hardware(
             features, prohibit_exploration=prohibit_exploration, smart_suggest=True)
         print("\tsuggested_hardware:", suggested_hardware)
-
-    
-    bw.reset_feature_cols(['size'])
-    bw.train()
-    bw.plot_runtime_predictions()
-
 
 
 def test_accuracy(data, feature_cols, model_choice, plot_predictions=False):
