@@ -1,7 +1,5 @@
-import pandas as pd
-import pathlib
-from enum import Enum
 from typing import Dict, Tuple
+import pandas as pd
 
 class HardwareManager:
     _hardware_map: Dict[int, str] = {}
@@ -44,13 +42,13 @@ class HardwareManager:
 
     @classmethod
     def get_hardware(cls, name:int) -> str:
-        """Get hardware value by idx."""
+        """Get hardware value string by idx."""
         assert name in cls._hardware_map, f"Invalid hardware: {name}"
         return cls._hardware_map[name]
     
     @classmethod
     def get_hardware_idx(cls, value:str) -> int:
-        """Get hardware idx by value."""
+        """Get hardware idx by value string."""
         for name, hardware_value in cls._hardware_map.items():
             if hardware_value == value:
                 return name
@@ -58,11 +56,11 @@ class HardwareManager:
 
     @classmethod
     def spec_from_hardware(cls, hardware_value:str) -> Tuple[int, int]:
-        """Get CPU and memory specs from a hardware value."""
+        """Get CPU and memory specs (tuple) from a hardware value string."""
         assert hardware_value in cls._specs_map, f"Invalid hardware value: {hardware_value}"
         return cls._specs_map[hardware_value]
 
     @classmethod
     def spec_from_hardware_idx(cls, name:int) -> Tuple[int, int]:
-        """Get CPU and memory specs from a hardware index."""
+        """Get CPU and memory specs (tuple) from a hardware index."""
         return cls.spec_from_hardware(cls.get_hardware(name))
