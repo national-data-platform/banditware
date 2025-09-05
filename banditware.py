@@ -250,7 +250,7 @@ class BanditWare:
         save_data = self._historical_data.copy()
         save_data["hardware"] = save_data["hardware"].apply(HardwareManager.get_hardware)
         if not self._save_dir.exists():
-            self._save_dir.mkdir()
+            self._save_dir.mkdir(exist_ok=True, parents=True)
         save_data.to_csv(self._save_dir.joinpath(self.SAVE_FILE_NAME), index=False)
 
     def test_accuracy(
