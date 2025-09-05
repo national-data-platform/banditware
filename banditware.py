@@ -533,7 +533,7 @@ class BanditWare:
         fig.update_xaxes(categoryorder="array", categoryarray=x_order)
 
         if save:
-            self._save_dir.mkdir(exist_ok=True)
+            self._save_dir.mkdir(exist_ok=True, parents=True)
             features_str = '_'.join(feature_cols)
             save_file = save_title or f"runtime_predictions_{features_str}.pdf"
             fig.write_image(f"{self._save_dir}/{save_file}")
