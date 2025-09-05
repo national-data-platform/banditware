@@ -5,14 +5,15 @@
 ## Setup
 1. **Set Up a Virtual Environment:**
     - With Python's built-in venv:
+      
       `python3 -m venv env`
+      
       `source env/bin/activate`
+
 2. **Install Dependencies:**
     - Install  required packages:
+      
       `pip3 install -r requirements.txt`
-3. **Run the Application:**
-    - Once dependencies are installed, run:
-      `python main.py`
 
 ## Running BanditWare:
 1. Choose a dataset you would like to use. Choose a path to a folder or csv file that holds various runs of an application.
