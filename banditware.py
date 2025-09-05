@@ -100,6 +100,7 @@ class BanditWare:
             retrain: whether to train the models on the newly added data
         """
         needed_cols = ["runtime"] + self.feature_cols
+        new_data = new_data.copy()
         # Handle new_data is an incorrectly formatted single row
         if isinstance(new_data, pd.Series) or new_data.shape[1] == 1:
             new_data = new_data.T.reset_index(drop=True)
