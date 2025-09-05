@@ -5,53 +5,23 @@ import pandas as pd
 import enum
 import os
 import re
-from typing import Dict
+from typing import Dict, Union
 
 this_dir = pathlib.Path(__file__).resolve().parent
-
-class Hardware(enum.Enum):
-    """Characterize hardware by the number of cpus and memory in a tuple (#cpu, mem (MB)), for example: H1 = (1, 16)"""
-
-    H1 = [(2, 16), 0]
-    H2 = [(3, 24), 1]
-    H3 = [(4, 16), 2]  # Add more if needed
-
-    @classmethod
-    def from_spec(cls, cpus, mem):
-        for hardware in cls:
-            if hardware.value[0] == (cpus, mem):
-                return hardware
-        raise ValueError(f"No matching hardware for {cpus} CPUs and {mem} MB memory.")
-    
-    @classmethod
-    def spec_from_hardware(cls, hardware_number: int) -> tuple[int, int]:
-        # Given an int (between 0 and 4), return the (cpu, mem gb) tuple
-        for hardware in cls:
-            if hardware.value[1] == hardware_number:
-                return hardware.value[0]
-        raise ValueError(f"No hardware found for number {hardware_number}.")
-    
-def get_hardware(name: str) -> Hardware:
-    """Get hardware values"""
-    try:
-        return Hardware[name.upper()]
-    except KeyError:
-        raise ValueError(f"Invalid hardware name: {name}") 
 
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Pre-process data for the integrated performance framework")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--base_path", type=pathlib.Path, help="Path to the head folder where data is stored.")
     group.add_argument("--data_file", type=pathlib.Path, help="Path to the data csv file.")
-
     return parser
 
-def traverse_data(base_path: pathlib.Path) -> pd.DataFrame:
+def traverse_data(base_path: pathlib.Path) -> Dict[str, pd.DataFrame]:
     """Traverses the results folder and loads all data found in csv files"""
     # Traverse the directory structure
     dfs = {}
     folder_name = ""
-    for root, dirs, files in os.walk(base_path):
+    for root, _, files in os.walk(base_path):
         for file in files:
             if file.endswith('.csv'):
                 # Construct the full file path
@@ -75,34 +45,30 @@ def traverse_data(base_path: pathlib.Path) -> pd.DataFrame:
 def identify_hardware(data: Dict[str, pd.DataFrame]) -> pd.DataFrame:
     """Identify the hardware used in the data"""
     ext_df = pd.DataFrame()
-    for key, value in data.items():
+    for hardware_str, hardware_df in data.items():
         # Get the number of cpus and memory
         pattern = r"(\d+)cores_(\d+)gb"
-        match = re.search(pattern, key)
+        match = re.search(pattern, hardware_str)
 
         if match:
-            cores = match.group(1)
-            gb = match.group(2)
-
-            hardware = Hardware.from_spec(int(cores), int(gb))
-            print(f"Hardware: {hardware.name} = {hardware.value}")
-            
+            cores = int(match.group(1))
+            gb = int(match.group(2))
             # Check if value is a DataFrame
-            if not isinstance(value, pd.DataFrame):
-                print(f"Error: Expected a DataFrame, but got {type(value)} for key {key}")
+            if not isinstance(hardware_df, pd.DataFrame):
+                print(f"Error: Expected a DataFrame, but got {type(hardware_df)} for key {hardware_str}")
                 continue
-
-            ext_df = extend_df(value, hardware, ext_df)
+            ext_df = extend_df(hardware_df, cores, gb, ext_df)
         else:
             print("Directory did not follow the expected pattern")
 
     return ext_df
 
-def extend_df(df: pd.DataFrame, hardware: Hardware, ext_df: pd.DataFrame) -> pd.DataFrame:
+def extend_df(df: pd.DataFrame, cpu_cores: int, mem_gb: int, ext_df: pd.DataFrame) -> pd.DataFrame:
     """Extend the dataframe with the hardware information"""
     # df["hardware"] = '_'.join(hardware.value[0])
-    cpus, mem = hardware.value[0]
-    df["hardware"] = f"{cpus}_{mem}"
+    # cpus, mem = hardware.value[0]
+    # df["hardware"] = f"{cpus}_{mem}"
+    df["hardware"] = f"{cpu_cores}_{mem_gb}"
     # df["hardware"] = hardware.value[1]
     ext_df = pd.concat([ext_df, df], ignore_index=True)
 
@@ -129,13 +95,20 @@ def clean_data(data: pd.DataFrame) -> pd.DataFrame:
     data = data.loc[:, ~data.columns.str.contains('^Unnamed')]
     # replace NaN with 0    
     data = data.fillna(0)
-
-    # have to do this for now
-    shared_areas = [1053216.0, 1854216.0, 1369900.0, 828144.0, 2543220.0]
-    data = data[data['area'].isin(shared_areas)]
     data = data.reset_index(drop=True)
-    
+
     return data
+
+def preprocess(base_path:Union[str,None]=None, data_file:Union[str,None]=None) -> pd.DataFrame:
+    correct_inputs = (base_path is not None) ^ (data_file is not None)
+    if not correct_inputs:
+        raise ValueError("Exactly one of base_path or data_file must be specified")
+    if base_path is not None:
+        dfs = traverse_data(pathlib.Path(base_path))
+        full_df = identify_hardware(dfs)
+        return clean_data(full_df)
+    full_df = pd.read_csv(data_file)
+    return clean_data(full_df)
 
 
 def main():
@@ -154,7 +127,8 @@ def main():
     # Save the data in a csv file 
     save_dir = this_dir.joinpath("results/data")
     save_dir.mkdir(parents=True, exist_ok=True)
-    full_df.to_csv(f"{save_dir}/data.csv", index=False)
+    save_file = f"{save_dir}/data.csv"
+    full_df.to_csv(save_file, index=False)
     
     
 
