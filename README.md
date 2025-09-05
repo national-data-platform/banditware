@@ -2,7 +2,25 @@
 
 > An online recommendation system that dynamically selects the most suitable hardware for applications using a contextual multi-armed bandit algorithm.
 
-To run BanditWare:
+## Setup
+1. **Set Up a Virtual Environment:**
+    - With Python's built-in venv:
+      ```
+      python3 -m venv env
+      source env/bin/activate
+      ```
+2. **Install Dependencies:**
+    - Install  required packages:
+      ```
+      pip3 install -r requirements.txt
+      ```
+3. **Run the Application:**
+    - Once dependencies are installed, run:
+      ```
+      python main.py
+      ```
+
+## Running BanditWare:
 1. Choose a dataset you would like to use. Choose a path to a folder or csv file that holds various runs of an application.
     - For a folder, label subfolders as follows: `{n}cores_{m}gb`, where `n` is the number of cpu cores and `m` is the number of gigabytes of RAM that the application was run on. Make sure all csv files in subfolders have a `runtime` column and any feature columns of the application.
     - For a csv file, make sure the columns contain `runtime` and any feature columns of the application.Encode the number of cpu cores and gigabytes of RAM in a `hardware` column with values like `"2_16"` to represent 2 cpu cores and 16 GB of RAM.
