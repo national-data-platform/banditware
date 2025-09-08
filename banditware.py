@@ -49,6 +49,7 @@ class BanditWare:
     NO_DATA_HARDWARE_SUGGESTION: Tuple[int,int] = (2,16)  # (CPU count, RAM in GB)
     # in `suggest_hardware`, what size self._historical_data must be to default set smart_suggest to False
     SMART_SUGGEST_CUTOFF_SIZE: int = 1000
+    SMART_SUGGEST_DISTANCE_MAX: float = 0.01
 
     def __init__(self,
                  data:Union[pd.DataFrame,None] = None,
@@ -141,7 +142,7 @@ class BanditWare:
             tolerance_seconds=tolerance_seconds)
         return best_hardware
     
-    def suggest_hardware(self, features:Union[np.ndarray,None] = None,
+    def suggest_hardware(self, features:Union[List,np.ndarray,None] = None,
                          tolerance_ratio: Union[float, None] = DEFAULT_TOLERANCE_RATIO, tolerance_seconds: int = DEFAULT_TOLERANCE_SECONDS,
                          prohibit_exploration:bool = False,
                          update_epsilon:bool = True,
@@ -153,7 +154,7 @@ class BanditWare:
         Give a suggestion for the hardware settings to run on next.
         This is the function to use for NDP default hardware suggestions.
         Parameters:
-            features: the input features (optional) that the application will be running on
+            features: the input features (optional) that the application will be running on as a 1D array
             tolerance_ratio: Fraction of acceptable runtime increase for choosing hardware with fewer resources during exploitation. 
                 * Ex: `tolerance_ratio=0.1` allows up to a 10% slower runtime if the hardware uses fewer resources
                 * If tolerance_ratio is 0, only updates best_hardware in case of a tie for runtimes.
@@ -171,15 +172,24 @@ class BanditWare:
         Returns:
             hardware_suggestion: tuple of (CPU count, RAM amount in GB)
         """
+        # Make sure the suggested hardware makes sense
         def sanity_check(hardware_suggestion:Tuple[int,int]):
             cpu_suggestion, mem_suggestion = hardware_suggestion
             err_msg = f"Something went wrong: sugested cpu or memory < 1: ({hardware_suggestion})"
             assert cpu_suggestion >= 1 and mem_suggestion >= 1, err_msg
+        # From a dict of runtimes by hardware, give the hardware suggestion and sanity check it
+        def get_suggestion(runtimes_by_hardware:Dict[int,float]) -> Tuple[int, int]:
+            best_hardware_idx = self._get_best_hardware(runtimes_by_hardware, tolerance_ratio=tolerance_ratio, tolerance_seconds=tolerance_seconds)
+            hardware_suggestion = HardwareManager.spec_from_hardware_idx(best_hardware_idx)
+            sanity_check(hardware_suggestion)
+            return hardware_suggestion
         
         if features is not None:
             err_msg = "length of `features` must match the length of BanditWare.feature_columns"
             assert len(features) == len(self.feature_cols), err_msg
+        
         if len(self._historical_data) == 0:
+            # No historical data -> give default suggestion
             hardware_suggestion = self.NO_DATA_HARDWARE_SUGGESTION
             sanity_check(hardware_suggestion)
             return hardware_suggestion
@@ -195,42 +205,62 @@ class BanditWare:
             return hardware_suggestion
 
         # Exploitation
-        avg_runtimes_by_hardware = {}
+
         if features is None:
-            # find the hardware with the best average runtime across features
+            # TODO: this automatically favors hardwares that don't have a history of running on expensive input features. Fix this so that is not the case.
+            # find the hardware with the best average runtime across all features
             runtimes_by_hardware = {h:[] for h in self._hardwares}
             unique_feature_groups = self._historical_data.groupby(self.feature_cols)
             for feature_set, features_df in unique_feature_groups:
                 for hardware, hardware_df in features_df.groupby("hardware"):
                     runtimes_by_hardware[hardware].append(hardware_df['runtime'].mean())
             avg_runtimes_by_hardware = {h:sum(runtimes)/len(runtimes) for h, runtimes in runtimes_by_hardware.items()}
-        else:
-            avg_runtimes_by_hardware = self._get_hardware_avg_runtimes(
-                    features, self._hardwares, self._historical_data)
-            # Handle if no rows match the given feature set
-            no_matching_features = all(np.isnan(runtime) for runtime in avg_runtimes_by_hardware)
-            if no_matching_features:
-                if smart_suggest is None:
-                    smart_suggest = len(self._historical_data) < self.SMART_SUGGEST_CUTOFF_SIZE
-                if not smart_suggest:
-                    # No smart_suggest -> use most common hardware
-                    best_hardware_idx = self._historical_data["hardware"].mode().iloc[0]
-                    hardware_suggestion = HardwareManager.spec_from_hardware_idx(best_hardware_idx)
-                    sanity_check(hardware_suggestion)
-                    return hardware_suggestion
-                # smart_suggest -> use gower distance to find most similar feature row
-                print("in smart suggest!")
-                target_row = pd.DataFrame(features, columns=self.feature_cols)
-                feature_matrix = self._historical_data[self.feature_cols]
-                closest_row_index = gower.gower_top_n(target_row, feature_matrix, n=1)['index'][0]
-                closest_features = self._historical_data[self.feature_cols].iloc[closest_row_index]
-                runtimes_by_hardware = self._get_hardware_avg_runtimes(
-                    closest_features, self._hardwares, self._historical_data)
+            return get_suggestion(avg_runtimes_by_hardware)
+        # features are specified
+        avg_runtimes_by_hardware = self._get_hardware_avg_runtimes(
+                features, self._hardwares, self._historical_data)
+        if not self._fully_trained:
+            self.train()
+        pred_runtimes_by_hardware = {
+            h:model.predict([features]) for h, model in self._model_instances.items()}
 
-        best_hardware_idx = self._get_best_hardware(avg_runtimes_by_hardware, tolerance_ratio=tolerance_ratio, tolerance_seconds=tolerance_seconds)
-        hardware_suggestion = HardwareManager.spec_from_hardware_idx(best_hardware_idx)
-        sanity_check(hardware_suggestion)
-        return hardware_suggestion
+        found_matching_features = any(not np.isnan(runtime) for runtime in avg_runtimes_by_hardware.values())
+        num_reliably_predictable_hardwares = sum(
+            len(df) > 10 for h, df in self._historical_data.groupby("hardware"))
+        if found_matching_features:
+            num_hardwares_w_data = sum(not np.isnan(r) for r in avg_runtimes_by_hardware.values())
+            # decide whether to use the true runtime data or predicted data for the given feature
+            if num_hardwares_w_data >= num_reliably_predictable_hardwares:
+                return get_suggestion(avg_runtimes_by_hardware)
+            return get_suggestion(pred_runtimes_by_hardware)
+        
+        # Handle if no rows match the given feature set
+        
+        if smart_suggest is None:
+            smart_suggest = len(self._historical_data) < self.SMART_SUGGEST_CUTOFF_SIZE
+        if not smart_suggest:
+            # No smart_suggest -> predict the best hardware for that feature set
+            return get_suggestion(pred_runtimes_by_hardware)
+        
+        # smart_suggest -> use gower distance to find most similar feature row
+        # then use that row if it is close enough in distance and has enough hardwares
+
+        # find closest features from historical data to the given features
+        target_row = pd.DataFrame(data=[features], columns=self.feature_cols)
+        feature_matrix = self._historical_data[self.feature_cols]
+        gower_dict = gower.gower_topn(target_row, feature_matrix, n=1)
+        closest_row_idx = gower_dict["index"][0]
+        gower_distance = gower_dict["values"][0]
+        closest_features = self._historical_data[self.feature_cols].iloc[closest_row_idx]
+        closest_runtimes_by_hardware = self._get_hardware_avg_runtimes(
+            closest_features, self._hardwares, self._historical_data)
+        
+        # Decide whether to use predictions or closest feature set to suggest hardware
+        num_hardwares_w_data = sum(not np.isnan(r) for r in closest_runtimes_by_hardware.values())
+        enough_real_data = num_hardwares_w_data >= num_reliably_predictable_hardwares
+        if enough_real_data and gower_distance <= self.SMART_SUGGEST_DISTANCE_MAX:
+            return get_suggestion(closest_runtimes_by_hardware)
+        return get_suggestion(pred_runtimes_by_hardware)
 
     def train(self):
         """Train BanditWare on the historical data"""
