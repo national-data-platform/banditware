@@ -144,7 +144,12 @@ class BanditWare:
         tolerance_ratio: Union[float, None] = DEFAULT_TOLERANCE_RATIO,
         tolerance_seconds: int = DEFAULT_TOLERANCE_SECONDS,
     ):
-        """Given a set of feature values and tolerance, predict the best hardware"""
+        """
+        Predict the best hardware to run the application given a set of features and tolerances.
+        Parameters:
+            features: the input features that the application will be running on as a list or 1D array
+
+        """
         err_msg = (
             "length of `features` must match the length of BanditWare.feature_columns"
         )
@@ -326,7 +331,7 @@ class BanditWare:
 
     def save_data(self):
         """
-        Save the historical data to a file
+        Save the historical data to a file in the save directory
         """
         save_data = self._historical_data.copy()
         save_data["hardware"] = save_data["hardware"].apply(
