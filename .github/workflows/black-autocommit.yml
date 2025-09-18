@@ -1,0 +1,36 @@
+name: Black Auto-Commit
+
+on:
+  pull_request:         # only run for PRs (e.g., branch "test" -> "main")
+
+permissions:
+  contents: write       # allow pushing commits to the branch that opened the PR
+
+jobs:
+  black:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@v4
+        with:
+          # When triggered by pull_request, checkout@v4 checks out the PR HEAD.
+          fetch-depth: 0             # needed to push
+          persist-credentials: true  # lets the action use GITHUB_TOKEN to push
+
+      - name: Run Black (format in-place)
+        id: black
+        uses: rickstaa/action-black@v1
+        with:
+          # no --check: we WANT it to rewrite files
+          black_args: "."
+
+      - name: Commit & push if files were reformatted
+        if: steps.black.outputs.is_formatted == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: ":art: Apply Black formatting"
+          # By default it commits to the currently checked out branch (the PR branch).
+          # Optionally restrict to Python paths:
+          # file_pattern: |
+          #   **/*.py
+
