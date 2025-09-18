@@ -731,7 +731,6 @@ def get_parser() -> argparse.ArgumentParser:
 
 
 def main():
-
     parser = get_parser()
     args = parser.parse_args()
     n_sims = args.n_sims

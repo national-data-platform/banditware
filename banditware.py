@@ -64,7 +64,6 @@ class BanditWare:
         epsilon_decay: float = DEFAULT_EPSILON_DECAY,
         epsilon_min: float = DEFAULT_EPSILON_MIN,
     ):
-
         # ---- private member variables ----
 
         self._save_dir: pathlib.Path = self._init_save_dir(save_dir)
