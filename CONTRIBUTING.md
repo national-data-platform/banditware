@@ -14,5 +14,5 @@ Before you start writing code, please get your environment set up.
      ```
    - If you are not using VS Code, install the [Black Formatter](https://github.com/psf/black) and run it on all updated files before committing anything.
 3. Create a new branch, make any changes on that branch, then Pull Request that branch into `main`.
-   - If there area any unformatted python files in your pull request, a github action will automatically run and commit an updated version of those files on your branch.
+   - If there are any unformatted python files in your pull request, a github action will automatically run and commit an updated version of those files on your branch.
    - Make sure to run `git pull` after creating your pull request so you have those format changes locally as well.
