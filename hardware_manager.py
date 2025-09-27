@@ -52,12 +52,20 @@ class HardwareManager:
         return cls._hardware_map[name]
 
     @classmethod
-    def get_hardware_idx(cls, value: str) -> int:
+    def hardware_idx_from_str(cls, value: str) -> int:
         """Get hardware idx by value string."""
         for name, hardware_value in cls._hardware_map.items():
             if hardware_value == value:
                 return name
         raise AssertionError(f"Invalid hardware value: {value}")
+
+    @classmethod
+    def hardware_idx_from_spec(cls, spec: Tuple[int, int]) -> int:
+        """Get hardware idx by value string."""
+        for name, (cpu, mem) in cls._specs_map.items():
+            if cpu == spec[0] and mem == spec[1]:
+                return cls.hardware_idx_from_str(name)
+        raise AssertionError(f"Invalid hardware spec: {spec}")
 
     @classmethod
     def spec_from_hardware(cls, hardware_value: str) -> Tuple[int, int]:
