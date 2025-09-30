@@ -8,10 +8,13 @@ from typing import Dict, List, Tuple, Union, Any
 import gower
 import numpy as np
 import pandas as pd
-import plotly.express as px
 from sklearn.metrics import mean_squared_error  # for RMSE calculation
+import plotly.express as px
 import plotly.io as pio
+from tqdm import tqdm
 from models import Model, ModelInterface
+from metric_collection.querying import query_performance_metrics
+from metric_collection.time_functions import utc_datetime_ify
 
 # plotly has a bug where the first time a graph is saved as a pdf, there is a loading message
 # that gets integrated into the pdf directly. setting mathjax to None bypasses that bug.
@@ -28,7 +31,6 @@ TODO:
 * call preprocessor if data has not been preprocessed
 * change self._hardwares to just be realistic hardwares, and add a self._all_hardwares that includes hardware configurations that have very limited data. 
     * Add an option to specify whether self._hardwares should be a subset of self._all_hardwares
-* add support for model params
 * Update documentation
 """
 
@@ -38,20 +40,53 @@ random.seed(42)
 
 
 class BanditWare:
+    # TODO: move constants to a config file
+    # ==========================
+    # Directories and file names
+    # ==========================
     SAVE_FILE_NAME: str = "bw_data.csv"
     BANDITWARE_DIR: str = "bw_save_data"
-    # defaults
+    # ========
+    # Defaults
+    # ========
     DEFAULT_TOLERANCE_RATIO: float = 0.0
     DEFAULT_TOLERANCE_SECONDS: int = 0
     DEFAULT_EPSILON_START: float = 1.0
     DEFAULT_EPSILON_DECAY: float = 0.99
     DEFAULT_EPSILON_MIN: float = 0.0
     DEFAULT_SAVE_DIR: str = "bw_unnamed"
+    # ===================
+    # Hardware Suggestion
+    # ===================
     # what hardware to suggest when there is no historical data
-    NO_DATA_HARDWARE_SUGGESTION: Tuple[int, int] = (2, 16)  # (CPU count, RAM in GB)
+    NO_DATA_HARDWARE_SUGGESTION: Tuple[int, int] = (2, 16)  # (CPU count, GB of RAM)
+    CPU_UTILIZATION_IDEAL_RANGE: Dict[str, float] = {"min": 0.5, "mid": 0.7, "max": 0.9}
+    MEM_UTILIZATION_IDEAL_RANGE: Dict[str, float] = {"min": 0.5, "mid": 0.7, "max": 0.9}
     # in `suggest_hardware`, what size self._historical_data must be to default set smart_suggest to False
     SMART_SUGGEST_CUTOFF_SIZE: int = 1000
     SMART_SUGGEST_DISTANCE_MAX: float = 0.01
+    # =======================
+    # Historical data columns
+    # =======================
+    # columns used for performance data querying and filtering out query columns
+    PERFORMANCE_COLS: List[str] = [
+        # NOTE: do not change the name of these columns, as they are used in querying.py
+        # cpu
+        "cpu_usage_%",
+        "max_cpu_count",
+        # memory
+        "mem_usage_%",
+        "max_mem_gb",
+        # gpu
+        "gpu_usage_%",
+        "max_gpu_count",
+    ]
+    NON_FEATURE_COLS: List[str] = [
+        "hardware",
+        "runtime",
+        "start",
+        "end",
+    ] + PERFORMANCE_COLS
 
     def __init__(
         self,
@@ -60,6 +95,7 @@ class BanditWare:
         save_dir: Union[pathlib.Path, str, None] = None,
         model_choice: Union[Model, str] = Model.LINEAR_REGRESSION,
         model_params: Union[Dict[str, Any], None] = None,
+        ndp_username: Union[str, None] = None,
         epsilon_start: float = DEFAULT_EPSILON_START,
         epsilon_decay: float = DEFAULT_EPSILON_DECAY,
         epsilon_min: float = DEFAULT_EPSILON_MIN,
@@ -90,6 +126,8 @@ class BanditWare:
         # ---- public member variables ----
 
         self.historical_data_csv: str = str(save_dir) + "/bw_data.csv"
+        # ndp username is used for querying performance data to make novel hardware suggestions
+        self.ndp_username: Union[str, None] = ndp_username
         self.feature_cols: List[str] = feature_cols or []
         self.reset_feature_cols(feature_cols)
 
@@ -203,15 +241,14 @@ class BanditWare:
             hardware_suggestion: tuple of (CPU count, RAM amount in GB)
         """
 
-        # Make sure the suggested hardware makes sense
         def sanity_check(hardware_suggestion: Tuple[int, int]):
+            """Make sure the suggested hardware makes sense"""
             cpu_suggestion, mem_suggestion = hardware_suggestion
             err_msg = f"Something went wrong: sugested cpu or memory < 1: ({hardware_suggestion})"
             assert cpu_suggestion >= 1 and mem_suggestion >= 1, err_msg
 
-        # From a dict of runtimes by hardware, give the hardware suggestion and sanity check it
-
         def get_suggestion(runtimes_by_hardware: Dict[int, float]) -> Tuple[int, int]:
+            """From a dict of runtimes by hardware, give the hardware suggestion and sanity check it. If there is performance data, update the suggestion based on that data"""
             best_hardware_idx = self._get_best_hardware(
                 runtimes_by_hardware,
                 tolerance_ratio=tolerance_ratio,
@@ -221,6 +258,11 @@ class BanditWare:
                 best_hardware_idx
             )
             sanity_check(hardware_suggestion)
+            self._update_suggestion_w_perfromance_data(
+                suggestion=hardware_suggestion,
+                features=features,
+                prefer_recent_data=prefer_recent_data,
+            )
             return hardware_suggestion
 
         if features is not None:
@@ -258,6 +300,7 @@ class BanditWare:
                 for h, runtimes in runtimes_by_hardware.items()
             }
             return get_suggestion(avg_runtimes_by_hardware)
+
         # features are specified
         avg_runtimes_by_hardware = self._get_hardware_avg_runtimes(
             features, self._hardwares, self._historical_data
@@ -330,12 +373,17 @@ class BanditWare:
 
     def save_data(self):
         """
-        Save the historical data to a file in the save directory
+        Save the historical data to a file in the save directory.
+        WARNING: Will overwrite any pre-existing data in this savefile with the current data
         """
+        # TODO: add overwriting warning...
+        # TODO: If someone creates `bw=BanditWare(data=df, save_dir="...")`, then runs `bw.query_performance_data(batch_size=...)`, and then stops the program after n batches, that will be saved.
+        # TODO: But, if they run that same program again, the saved data will be overwritten the next time `query_performance_data` is called, because they passed in the old `df` during the init, losing all the previous progress.
         save_data = self._historical_data.copy()
-        save_data["hardware"] = save_data["hardware"].apply(
-            HardwareManager.get_hardware
-        )
+        if "hardware" in save_data.columns:
+            save_data["hardware"] = save_data["hardware"].apply(
+                HardwareManager.get_hardware
+            )
         if not self._save_dir.exists():
             self._save_dir.mkdir(exist_ok=True, parents=True)
         save_data.to_csv(self._save_dir.joinpath(self.SAVE_FILE_NAME), index=False)
@@ -471,6 +519,69 @@ class BanditWare:
         }
         return stats_dict
 
+    def query_performance_data(
+        self,
+        ndp_username: Union[str, None] = None,
+        cpu: bool = True,
+        memory: bool = True,
+        gpu: bool = False,
+        batch_size: int = 50,
+    ) -> None:
+        """
+        Query performance of the historical data
+        Parameters:
+            ndp_username: NDP username to use for querying. If None, uses the self.ndp_username set when creating BanditWare.
+                * If both are None, will raise a ValueError
+            cpu: whether to query for CPU usage percentage and max CPU count
+            mem: whether to query for memory usage percentage and max memory in GB
+            gpu: whether to query for GPU usage percentage and max GPU count
+        Side Effects:
+            Edits self._historical_data to include the queried performance metrics
+        Raises:
+            RuntimeError: if the query fails
+            ValueError: if start/end column values are invalid or ndp_username is empty
+        """
+        if not any((cpu, memory, gpu)):
+            print("Warning: No metrics selected to query. Nothing will be queried")
+            print("\tFrom `query_historical_data()`")
+            return
+
+        if gpu:
+            # TODO: implement gpu recommendations
+            raise NotImplementedError("GPU usage querying not implemented yet")
+
+        metrics_to_query = []
+        if cpu:
+            metrics_to_query.extend([c for c in self.PERFORMANCE_COLS if "cpu" in c])
+        if memory:
+            metrics_to_query.extend([c for c in self.PERFORMANCE_COLS if "mem" in c])
+        if gpu:
+            metrics_to_query.extend([c for c in self.PERFORMANCE_COLS if "gpu" in c])
+
+        # make sure all necessary columns are in the dataframe
+        for col in metrics_to_query:
+            if col not in self._historical_data.columns:
+                self._historical_data[col] = None
+
+        ndp_username = ndp_username or self.ndp_username
+        if ndp_username is None or ndp_username == "":
+            raise ValueError("ndp_username must be set to query performance data")
+        # Query data in batches to save progress
+        batch_starts = range(0, len(self._historical_data), batch_size)
+        multiple_batches = len(batch_starts) > 1
+        inner_progress_bars = not multiple_batches  # Don't have nested progress bars
+        for start_row in tqdm(batch_starts) if multiple_batches else batch_starts:
+            end_row = min(start_row + batch_size, len(self._historical_data))
+            query_performance_metrics(
+                self._historical_data,
+                metrics=metrics_to_query,
+                ndp_username=ndp_username,
+                progress_bar=inner_progress_bars,
+                start_row=start_row,
+                end_row=end_row,
+            )
+            self.save_data()
+
     def reset_feature_cols(
         self, new_feature_cols: Union[List[str], None] = None
     ) -> None:
@@ -481,7 +592,7 @@ class BanditWare:
         """
         if new_feature_cols is not None:
             cleaned_feature_cols = [
-                col for col in new_feature_cols if col not in ["runtime", "hardware"]
+                col for col in new_feature_cols if col not in self.NON_FEATURE_COLS
             ]
             self.feature_cols = cleaned_feature_cols
             self.reset_models()
@@ -495,7 +606,7 @@ class BanditWare:
         self.feature_cols = [
             col
             for col in self._historical_data.columns
-            if col not in ["runtime", "hardware"]
+            if col not in self.NON_FEATURE_COLS
         ]
         self.reset_models()
 
@@ -559,6 +670,12 @@ class BanditWare:
         )
         new_model_params = model_params if model_params is not None else {}
         self.reset_models(new_model_choice, new_model_params)
+
+    def get_historical_data(self):
+        """Get the historical data of the application"""
+        df = self._historical_data.copy()
+        df["hardware"] = df["hardware"].apply(HardwareManager.get_hardware)
+        return df
 
     def plot_runtime_predictions(
         self,
@@ -776,11 +893,14 @@ class BanditWare:
         default_dir = this_dir.joinpath(self.BANDITWARE_DIR, self.DEFAULT_SAVE_DIR)
         if save_dir is None:
             return default_dir
-        # There is a specified place the folder should go (./ or ../) -> don't add it to bw directory
+        # If there is a specified place the folder should go (./ or ../) -> don't add it to bw directory
         if isinstance(save_dir, str) and "." in save_dir:
             return pathlib.Path(save_dir)
-        # put save directory in banditware's save directory
-        return this_dir.joinpath(self.BANDITWARE_DIR, save_dir)
+        # put save directory in banditware's save directory if the save directory is not already mentioned
+        save_path = pathlib.Path(save_dir)
+        if save_path.parts and save_path.parts[0] == self.BANDITWARE_DIR:
+            return this_dir.joinpath(self.BANDITWARE_DIR, *save_path.parts[1:])
+        return this_dir.joinpath(self.BANDITWARE_DIR, save_path)
 
     def _init_data(self, data=None) -> pd.DataFrame:
         """Loads in the preprocessed data and updates the hardware settings"""
@@ -791,6 +911,30 @@ class BanditWare:
             return df
         # get data
         full_data = data.copy() if data is not None else pd.read_csv(save_file)
+        # convert datetimes if they exist
+        if "start" in full_data.columns:
+            full_data["start"] = full_data["start"].apply(utc_datetime_ify)
+        if "end" in full_data.columns:
+            full_data["end"] = full_data["end"].apply(utc_datetime_ify)
+        # calculate runtimes if not given
+        if "runtime" not in full_data.columns:
+            if not ("start" in full_data.columns and "end" in full_data.columns):
+                raise ValueError(
+                    f"`data` must contain a 'runtime' column or both 'start' and 'end' columns to calculate runtime. `data.columns=[{list(full_data.columns)}]`"
+                )
+            # make sure start and end columns are not NA
+            na_msg = "All %s times must not be NA to calculate runtimes"
+            for col in ["start", "end"]:
+                assert all(pd.notna(item) for item in full_data[col]), na_msg % col
+            full_data["runtime"] = (
+                full_data["end"] - full_data["start"]
+            ).dt.total_seconds()
+            full_data["runtime"] = full_data["runtime"].apply(ceil)
+        # Make sure runtime column is valid
+        runtime_msg = "All runtimes must be non-%s"
+        assert all(pd.notna(item) for item in full_data["runtime"]), runtime_msg % "NA"
+        assert (full_data["runtime"] >= 0).all(), runtime_msg % "negative"
+        # Init hardware
         HardwareManager.init_manager(full_data)
         self._hardwares = list(range(HardwareManager.num_hardwares))
         # If hardwares have changed, update model instances
@@ -800,7 +944,7 @@ class BanditWare:
                 self.reset_models()
         # Replace the hardware name with an integer identifier in hardware manager
         full_data["hardware"] = full_data["hardware"].apply(
-            lambda x: int(HardwareManager.get_hardware_idx(x))
+            lambda x: int(HardwareManager.hardware_idx_from_str(x))
         )
         return full_data
 
@@ -1072,6 +1216,104 @@ class BanditWare:
 
         hardware_prediction_accuracy = np.mean(prediction_results)
         return hardware_prediction_accuracy
+
+    def _update_suggestion_w_perfromance_data(
+        self,
+        suggestion: Tuple[int, int],
+        features: Union[List, np.ndarray, None],
+        prefer_recent_data: bool = False,
+    ) -> Tuple[int, int]:
+        """
+        Given a suggestion made by `suggest_hardware()`, update it with a performance-aware
+        suggestion if there is queried performance data for the hardware and features (optional).
+
+        Parameters:
+            suggestion: the hardware settings suggested by `suggest_hardware()`
+                * represented as a tuple of ints: (CPU count, GB of RAM)
+            features: the feature inputs that were given to `suggest_hardware()` if there were any
+            perfer_recent_data: whether to give higher weights to data run more recently in calculation of data importance toward suggestion
+        Returns:
+            updated_suggestion: the new hardware suggestion as a tuple of (CPU count, GB of RAM)
+        """
+        # if there is no performance data, return the original suggestion
+        # TODO: update this once GPU data is implemented
+        relevant_performance_cols = [
+            col for col in self.PERFORMANCE_COLS if "gpu" not in col
+        ]
+        if not set(relevant_performance_cols).issubset(
+            set(self._historical_data.columns)
+        ):
+            return suggestion
+        # get data where hardware and features match the suggestion
+        hardware_idx = HardwareManager.hardware_idx_from_spec(suggestion)
+        df = self._historical_data[self._historical_data["hardware"] == hardware_idx]
+        df = df.copy()
+        if features is not None:
+            mask = np.logical_and.reduce(
+                [df[col] == val for col, val in zip(self.feature_cols, features)]
+            )
+            df = df[mask]
+        # Get df rows where all relevant performance columns are not null
+        df = df.dropna(subset=relevant_performance_cols, axis=0, ignore_index=True)
+        if len(df) == 0:
+            return suggestion
+        # Get average performance data for this hardware & features, weighted by recency if specified
+        if prefer_recent_data:
+            df = df.sort_values(by="start", ascending=True)
+            # linearly increase weight of perfromance data, preferring recent data
+            weight_factors = np.linspace(0, 1, len(df))
+        else:
+            weight_factors = np.ones(len(df))
+        avg_cpu_percent = np.average(df["cpu_usage_%"], weights=weight_factors)
+        avg_mem_percent = np.average(df["mem_usage_%"], weights=weight_factors)
+        avg_max_cpus = ceil(np.average(df["max_cpu_count"], weights=weight_factors))
+        avg_max_mem = ceil(np.average(df["max_mem_gb"], weights=weight_factors))
+
+        hardware_cpu_count, hardware_mem_gb = suggestion
+        avg_cpus_used = ceil(avg_cpu_percent * hardware_cpu_count)
+        is_ideal_cpu_usage = (
+            self.CPU_UTILIZATION_IDEAL_RANGE["min"]
+            <= avg_cpu_percent
+            <= self.CPU_UTILIZATION_IDEAL_RANGE["max"]
+        )
+        avg_gb_used = ceil(avg_mem_percent * hardware_mem_gb)
+        is_ideal_mem_usage = (
+            self.MEM_UTILIZATION_IDEAL_RANGE["min"]
+            <= avg_cpu_percent
+            <= self.MEM_UTILIZATION_IDEAL_RANGE["max"]
+        )
+
+        # Update the CPU suggestion based on perfromance data
+        new_cpu_suggestion = None
+        # Non-parallel applications should always use 1 core
+        if ceil(avg_max_cpus) == 1:
+            new_cpu_suggestion = 1
+        elif is_ideal_cpu_usage:
+            new_cpu_suggestion = avg_cpus_used
+        else:
+            # Try to get the cpu utilization % to be in the ideal range
+            new_cpu_suggestion = ceil(
+                avg_cpu_percent
+                * hardware_cpu_count
+                / self.CPU_UTILIZATION_IDEAL_RANGE["mid"]
+            )
+        # Update the memory suggestion based on performance data
+        new_mem_suggestion = None
+        if is_ideal_mem_usage:
+            new_mem_suggestion = avg_gb_used
+        else:
+            # Try to get the memory utilization % to be in the ideal range
+            new_mem_suggestion = ceil(
+                avg_mem_percent
+                * hardware_mem_gb
+                / self.MEM_UTILIZATION_IDEAL_RANGE["mid"]
+            )
+        # Make sure the suggestion is at least 1 CPU core and 1 GB of RAM
+        new_cpu_suggestion = max(1, new_cpu_suggestion)
+        new_mem_suggestion = max(1, new_mem_suggestion)
+        updated_suggestion = new_cpu_suggestion, new_mem_suggestion
+        # TODO: check if updated_suggestion has been run before on the current settings. If it has, check that it performs well.
+        return updated_suggestion
 
     # helpers for plotting
 
