@@ -1,8 +1,23 @@
+"""
+HardwareManager is used with BanditWare to convert between different representations of a hardware
+"""
+
 from typing import Dict, Tuple
 import pandas as pd
 
 
 class HardwareManager:
+    """
+    HardwareManager is used to convert between different representations of a hardware.
+    Possible representations, using the example of 2 CPU cores and 8 GB of RAM:
+        1. name (str): f"{cpu_count}_{mem_gb}" --> "2_8"
+        2. spec (Tuple): (cpu_count, mem_gb) --> (2, 8)
+        3. index (int) --> 0
+    Note: HardwareManager is a static class, so if you call `init_manager()` multiple
+    times in one program, whenever you do, it will update everywhere.
+    This can be especially problematic if you are using hardware index to represent hardware, as BanditWare does.
+    """
+
     _hardware_map: Dict[int, str] = {}
     _specs_map: Dict[str, Tuple[int, int]] = {}
     num_hardwares: int = 0
