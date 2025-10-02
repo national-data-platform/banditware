@@ -1,5 +1,9 @@
 """
 Time related functions for metric collection and processing.
+utc_datetime_ify: Given some representation of a time, convert it to a datetime in UTC
+str_to_utc_datetime: Given a string representation of a time, convert it to a datetime in UTC
+delta_to_time_str: Given a datetime.timedelta, return a PromQL time string
+time_str_to_delta: Given a PromQL time string, convert it to a datetime.timedelta
 """
 
 from typing import Union, List
