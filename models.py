@@ -1,18 +1,8 @@
 """
 This file is used to provide an easy way for BanditWare to use different models in the backend.
 It does so by providing an enum of model types called `Model` that all define
-a `fit` and `predict` function, as well as a `has_fit` member variable.
+a `fit`, `predict`, and `has_fit` method.
 BanditWare can use any model from this Model enum to create predictions.
-
-The Model enum can easily extend to use any scikit-learn model using the `SklearnWrapper` class.
-It can also use TensorFlow's Keras using the `KerasReg` class.
-If this file is extended to support more models/libraries, all classes must extend `BanditModel` to:
-    - accept all hyperparameters via `__init__(**kwargs)`
-    - implement `fit(X: np.ndarray, y: np.ndarray) -> Self`
-        (not including `Self` type annotation for compatibility with python < 3.11)
-    - implement `predict(X: np.ndarray) -> np.ndarray`
-    - implement `has_fit() -> bool` method that returns False until after `.fit()` is called.
-Then, add the new model to the `Model` enum
 """
 
 from functools import partial
@@ -164,11 +154,26 @@ class KerasReg(BaseEstimator, ModelInterface):
         return self._has_fit
 
 
-# Enum of all potential models and their constructors.
-# Uses partial() to accept hyperparameters later
-class Model(Enum):
-    """All models as an Enum that BanditWare can use"""
+# ================
+# Main Model enum
+# ================
 
+
+class Model(Enum):
+    """All models as an Enum that BanditWare can use.
+
+    The Model enum can easily extend to use any scikit-learn model using the `SklearnWrapper` class.
+    It can also use TensorFlow's Keras using the `KerasReg` class.
+    If this file is extended to support more models/libraries, all classes must extend `ModelInterface` to:
+        - accept all hyperparameters via `__init__(**kwargs)`
+        - implement `fit(X: np.ndarray, y: np.ndarray) -> Self`
+            (not including `Self` type annotation for compatibility with python < 3.11)
+        - implement `predict(X: np.ndarray) -> np.ndarray`
+        - implement `has_fit() -> bool` method that returns False until after `.fit()` is called.
+    Then, add the new model to the `Model` enum
+    """
+
+    # Use partial() to accept hyperparameters later
     LINEAR_REGRESSION = member(partial(SklearnWrapper, LinearRegression))
     RIDGE = member(partial(SklearnWrapper, Ridge))
     LASSO = member(partial(SklearnWrapper, Lasso))
