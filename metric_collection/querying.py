@@ -1,3 +1,8 @@
+"""
+This module defines a function for querying performance metrics for BanditWare on NDP runs
+`query_performance_metrics()`: query for performance metrics of application runs on NDP's JupyterHub
+"""
+
 from typing import List, Dict, Tuple, Union
 from datetime import datetime, timezone
 import pandas as pd
@@ -7,7 +12,7 @@ from hardware_manager import HardwareManager
 from metric_collection.time_functions import utc_datetime_ify, delta_to_time_str
 
 QUERY_TIMEOUT_SEC = 60
-# allows for pd.dataframe.progress_apply() which shows a progress bar for apply operations
+# allows for pd.dataframe.progress_apply() which shows a progress bar for dataframe.apply operations
 tqdm.pandas()
 
 
@@ -20,8 +25,8 @@ def query_performance_metrics(
     end_row: Union[int, None] = None,
 ) -> None:
     """
-    Given a dataframe with a 'start' and 'end' column and a list of metrics, query the nrp nautilus endpoint for each metric
-    at each timestamp and add the results as new columns to the dataframe.
+    Given a dataframe with a 'start' and 'end' column and a list of metrics, query for each metric
+    over the duration of the application run and add the results as new columns to the dataframe.
     Parameters:
         df: The dataframe to add queries to. Modifies the dataframe in place.
             * Must contain "start" and "end" columns
@@ -35,6 +40,7 @@ def query_performance_metrics(
     Side Effects:
         Modifies the dataframe in place, adding a new column for each metric in `metrics`
             * New columns will be named the same as the metric strings
+            * Values of -1 will be given to queries that didn't succeed or had 0 runtime
     """
     assert "start" in df.columns, "'start' column must be in `df`"
     assert "end" in df.columns, "'end' column must be in `df`"
@@ -64,13 +70,12 @@ def query_performance_metrics(
     # Put the queried column section back into the original dataframe
     for metric_col in metrics:
         df.loc[query_df.index, metric_col] = query_df[metric_col]
-    print("=" * 50, df, "=" * 50, sep="\n")
 
 
 def _query_performance_metric(row: pd.Series, metric: str, ndp_username: str) -> float:
     """
     Given a row of a dataframe with 'start' and 'end' columns, query the nrp nautilus endpoint for the ndp user's given metric over that period of time.
-    If the runtime is 0 seconds, return 0 for usage % metrics and 1 for (non gpu) max count metrics.
+    If the runtime is 0 seconds or the query doesn't succeed, return -1
     Parameters:
         row: A row of a dataframe with 'start' and 'end' columns
         metric: The metric to query
@@ -89,25 +94,16 @@ def _query_performance_metric(row: pd.Series, metric: str, ndp_username: str) ->
     end_dt = utc_datetime_ify(end)
     assert start_dt <= end_dt, "'start' must be less than or equal to 'end'"
     duration = end_dt - start_dt
-    if row[metric] is not None:
+    # Check if metric already queried
+    if pd.notna(row[metric]):
         return row[metric]
+
     # Handle 0 or invalid runtime - cannot query
     if duration.total_seconds() <= 0:
-        match metric:
-            case "cpu_usage_%":
-                return 0.0
-            case "max_cpu_count":
-                return 1.0
-            case "mem_usage_%":
-                return 0.0
-            case "max_mem_gb":
-                return 1.0
-            case "gpu_usage_%":
-                return 0.0
-            case "max_gpu_count":
-                return 0.0
+        return -1
 
     hardware_spec = HardwareManager.spec_from_hardware_idx(row["hardware"])
+
     query = _get_metric_query(
         metric,
         start=start_dt,
@@ -119,8 +115,7 @@ def _query_performance_metric(row: pd.Series, metric: str, ndp_username: str) ->
     # TODO: Handle if query_data() throws an error
     result = _query_data(query)
     if len(result) == 0 or len(result[0]["value"]) < 2:
-        # TODO: handle no data case better
-        return float("nan")
+        return -1
     value = float(result[0]["value"][1])
     return value
 
@@ -133,7 +128,6 @@ def _get_performance_metrics() -> List[str]:
         "cpu_usage_%",
         "max_cpu_count",
         "mem_usage_%",
-        "max_mem_gb",
         "gpu_usage_%",
         "max_gpu_count",
     ]
@@ -155,7 +149,6 @@ def _get_metric_query(
             * "cpu_usage_%"
             * "max_cpu_count"
             * "mem_usage_%"
-            * "max_mem_gb"
             * "gpu_usage_%"
             * "max_gpu_count"
         start: The start time of the application run (timezone-aware datetime in UTC)
@@ -169,13 +162,13 @@ def _get_metric_query(
     """
     metric_queries = {
         # CPU usage % = avg cpus used / total cpus = (increase in cpu_seconds / total seconds) / total cpus
-        "cpu_usage_%": 'sum(increase(container_cpu_usage_seconds_total{{pod=~"{pod_re}", container_name!=""}}[{duration_str}] offset {offset})) / {duration_sec} / {hardware_cpus}',
+        "cpu_usage_%": 'sum(increase(container_cpu_usage_seconds_total{{pod=~"{pod_re}", container="notebook"}}[{duration_str}] offset {offset})) / {duration_sec} / {hardware_cpus}',
         # Max CPUs used at once = max (rate of new cpu_seconds per second, sampled several times)
-        "max_cpu_count": 'max_over_time(sum(irate(container_cpu_usage_seconds_total{{pod=~"{pod_re}", container_name!=""}}[1m]))[{duration_str}:30s] offset {offset})',
+        "max_cpu_count": 'max_over_time(sum(irate(container_cpu_usage_seconds_total{{pod=~"{pod_re}", container="notebook"}}[1m]))[{duration_str}:30s] offset {offset})',
         # Mem usage % = max bytes used / given bytes = (max bytes used / (given GB * bytes per GB)
-        "mem_usage_%": 'sum by (pod)(max_over_time(container_memory_working_set_bytes{{pod=~"{pod_re}", container_name!=""}}[{duration_str}] offset {offset})) / (1024*1024*1024) / {hardware_gb}',
-        # Max GB used = max bytes used / bytes per GB
-        "max_mem_gb": 'sum by (pod)(max_over_time(container_memory_working_set_bytes{{pod=~"{pod_re}",container_name!=""}}[{duration_str}] offset {offset})) / (1024*1024*1024)',
+        "mem_usage_%": 'sum(max_over_time(container_memory_working_set_bytes{{pod=~"{pod_re}", container="notebook"}}[{duration_str}] offset {offset})) / (1024*1024*1024) / {hardware_gb}',
+        # no max_mem_count because that would be the same as mem_usage_% * hardware_mem
+        # max_cpu_count gives us new information: max cpus used at once, while max_mem_count and mem_usage_% measure the same thing
         # TODO: add gpu queries
         "gpu_usage_%": "",
         "max_gpu_count": "",
@@ -230,8 +223,9 @@ def _query_data(
             if len(res_list) == 0:
                 queried_data = requests.get(full_url, timeout=timeout_sec).json()
         except KeyError:
-            print(f"\n\nqueried_data is\n{queried_data}\n")
             # pylint: disable=raise-missing-from
-            raise RuntimeError(f"\n\nBad query string: {query}\n\n")
+            raise RuntimeError(
+                f"\n\nBad query string:\n{query}\n\nqueried_data is:\n{queried_data}\n\n"
+            )
 
     return queried_data["data"]["result"]

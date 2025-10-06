@@ -76,17 +76,16 @@ class BanditWare:
         "max_cpu_count",
         # memory
         "mem_usage_%",
-        "max_mem_gb",
         # gpu
         "gpu_usage_%",
         "max_gpu_count",
     ]
-    NON_FEATURE_COLS: List[str] = [
+    NON_FEATURE_COLS: List[str] = PERFORMANCE_COLS + [
         "hardware",
         "runtime",
         "start",
         "end",
-    ] + PERFORMANCE_COLS
+    ]
 
     def __init__(
         self,
@@ -217,7 +216,6 @@ class BanditWare:
         prefer_recent_data: bool = False,
     ) -> Tuple[int, int]:
         # TODO: implement optional parameter to more heavily weight recent data
-        # TODO: add performance data functionality - suggest new hardware based on cpu_usage_% and mem_usage_% (use PREMOA)
         """
         Give a suggestion for the hardware settings to run on next.
         This is the function to use for NDP default hardware suggestions.
@@ -258,10 +256,12 @@ class BanditWare:
                 best_hardware_idx
             )
             sanity_check(hardware_suggestion)
-            self._update_suggestion_w_perfromance_data(
+            hardware_suggestion = self._update_suggestion_w_perfromance_data(
                 suggestion=hardware_suggestion,
                 features=features,
                 prefer_recent_data=prefer_recent_data,
+                tolerance_ratio=tolerance_ratio or 0.0,
+                tolerance_seconds=tolerance_seconds,
             )
             return hardware_suggestion
 
@@ -748,13 +748,9 @@ class BanditWare:
                     }
                 )
                 hardware_data = data[data["hardware"] == hardware_idx]
-                mask = np.logical_and.reduce(
-                    [
-                        hardware_data[col] == val
-                        for col, val in zip(feature_cols, features)
-                    ]
-                )
-                y_spread = hardware_data[mask]["runtime"]
+                y_spread = self._filter_df_by_features(hardware_data, features)[
+                    "runtime"
+                ]
                 for y in y_spread:
                     rows.append(
                         {
@@ -1001,16 +997,8 @@ class BanditWare:
         if df is None:
             df = self._historical_data
         # get the runtimes from either the test or the train data
-        filtered_data = df[
-            (df["hardware"] == hardware)
-            & np.logical_and.reduce(
-                [
-                    df[col] == feature
-                    for col, feature in zip(self.feature_cols, features)
-                ]
-            )
-        ]
-
+        filtered_data = df[df["hardware"] == hardware]
+        filtered_data = self._filter_df_by_features(filtered_data, features)
         return filtered_data["runtime"].to_numpy()
 
     def _sample_runtime(
@@ -1098,6 +1086,18 @@ class BanditWare:
                 max_resource_decrease = overall_resource_decrease
 
         return best_hardware
+
+    def _filter_df_by_features(
+        self, df: pd.DataFrame, features: Union[np.ndarray, List, Tuple]
+    ):
+        """
+        Given a dataframe and a set of features, return a subset of the original dataframe
+        where the feature columns match the passed in features values
+        """
+        mask = np.logical_and.reduce(
+            [df[col] == val for col, val in zip(self.feature_cols, features)]
+        )
+        return df[mask]
 
     # helpers for testing accuracy
 
@@ -1222,6 +1222,8 @@ class BanditWare:
         suggestion: Tuple[int, int],
         features: Union[List, np.ndarray, None],
         prefer_recent_data: bool = False,
+        tolerance_ratio: float = 0.0,
+        tolerance_seconds: int = 0,
     ) -> Tuple[int, int]:
         """
         Given a suggestion made by `suggest_hardware()`, update it with a performance-aware
@@ -1232,6 +1234,9 @@ class BanditWare:
                 * represented as a tuple of ints: (CPU count, GB of RAM)
             features: the feature inputs that were given to `suggest_hardware()` if there were any
             perfer_recent_data: whether to give higher weights to data run more recently in calculation of data importance toward suggestion
+            tolerance_ratio: Fraction of acceptable runtime increase for choosing hardware with fewer resources during exploitation.
+                * tolerance_ratio of 0.05 allows for a 5% slowdown
+            tolerance_seconds: acceptable runtime increase in seconds for choosing hardware with fewer resources.
         Returns:
             updated_suggestion: the new hardware suggestion as a tuple of (CPU count, GB of RAM)
         """
@@ -1249,25 +1254,32 @@ class BanditWare:
         df = self._historical_data[self._historical_data["hardware"] == hardware_idx]
         df = df.copy()
         if features is not None:
-            mask = np.logical_and.reduce(
-                [df[col] == val for col, val in zip(self.feature_cols, features)]
-            )
-            df = df[mask]
-        # Get df rows where all relevant performance columns are not null
+            df = self._filter_df_by_features(df, features)
+        # Get df rows where all relevant performance columns are valid and not null
         df = df.dropna(subset=relevant_performance_cols, axis=0, ignore_index=True)
+        df = df[(df[relevant_performance_cols] >= 0).all(axis=1)].reset_index(drop=True)
         if len(df) == 0:
             return suggestion
         # Get average performance data for this hardware & features, weighted by recency if specified
         if prefer_recent_data:
             df = df.sort_values(by="start", ascending=True)
-            # linearly increase weight of perfromance data, preferring recent data
-            weight_factors = np.linspace(0, 1, len(df))
+            # polynomially increase weight of rows' perfromance data, preferring recent data
+            exponent = 2
+            # range_start and range_end determine how much more important the first datapoint is from the last.
+            # a range of [1,10] would mean the last datapoint is 10 times more important
+            range_start = 1
+            range_end = 10
+            weight_factors = np.power(
+                np.linspace(
+                    range_start, np.power(range_end, 1 / exponent), num=len(df)
+                ),
+                exponent,
+            )
         else:
             weight_factors = np.ones(len(df))
         avg_cpu_percent = np.average(df["cpu_usage_%"], weights=weight_factors)
         avg_mem_percent = np.average(df["mem_usage_%"], weights=weight_factors)
         avg_max_cpus = ceil(np.average(df["max_cpu_count"], weights=weight_factors))
-        avg_max_mem = ceil(np.average(df["max_mem_gb"], weights=weight_factors))
 
         hardware_cpu_count, hardware_mem_gb = suggestion
         avg_cpus_used = ceil(avg_cpu_percent * hardware_cpu_count)
@@ -1279,7 +1291,7 @@ class BanditWare:
         avg_gb_used = ceil(avg_mem_percent * hardware_mem_gb)
         is_ideal_mem_usage = (
             self.MEM_UTILIZATION_IDEAL_RANGE["min"]
-            <= avg_cpu_percent
+            <= avg_mem_percent
             <= self.MEM_UTILIZATION_IDEAL_RANGE["max"]
         )
 
@@ -1293,8 +1305,8 @@ class BanditWare:
         else:
             # Try to get the cpu utilization % to be in the ideal range
             new_cpu_suggestion = ceil(
-                avg_cpu_percent
-                * hardware_cpu_count
+                hardware_cpu_count
+                * avg_cpu_percent
                 / self.CPU_UTILIZATION_IDEAL_RANGE["mid"]
             )
         # Update the memory suggestion based on performance data
@@ -1304,15 +1316,47 @@ class BanditWare:
         else:
             # Try to get the memory utilization % to be in the ideal range
             new_mem_suggestion = ceil(
-                avg_mem_percent
-                * hardware_mem_gb
+                hardware_mem_gb
+                * avg_mem_percent
                 / self.MEM_UTILIZATION_IDEAL_RANGE["mid"]
             )
+        # TODO: check if updated_suggestion has been run before on the current settings. If it has, check that it performs well before resuggesting it.
+        og_cpu_suggestion, og_mem_suggestion = suggestion
+        df["hardware"] = df["hardware"].apply(HardwareManager.get_hardware)
+        df["hw_cpu"] = df["hardware"].apply(lambda s: s.split("_")[0]).astype(int)
+        df["hw_mem"] = df["hardware"].apply(lambda s: s.split("_")[1]).astype(int)
+        # see if the updated suggestion is poor
+        if features is not None:
+            og_runtime = df["runtime"].mean()
+            tolerated_runtime = max(
+                og_runtime * tolerance_ratio, og_runtime + tolerance_seconds
+            )
+            enough_data_cutoff = 5
+            # cpu
+            relevant_cpu_history = df[
+                (df["hw_cpu"] == new_cpu_suggestion)
+                & (df["hw_mem"] >= new_mem_suggestion)
+            ]
+            if len(relevant_cpu_history) >= enough_data_cutoff:
+                avg_new_runtime = relevant_cpu_history["runtime"].mean()
+                # if runs were too slow with new suggested cpu count, keep original suggestion
+                if avg_new_runtime > tolerated_runtime:
+                    new_cpu_suggestion = og_cpu_suggestion
+            # memory
+            relevant_mem_history = df[
+                (df["hw_mem"] == new_mem_suggestion)
+                & (df["hw_cpu"] >= new_cpu_suggestion)
+            ]
+            if len(relevant_mem_history) >= enough_data_cutoff:
+                avg_new_runtime = relevant_mem_history["runtime"].mean()
+                # if runs were too slow with new suggested cpu count, keep original suggestion
+                if avg_new_runtime > tolerated_runtime:
+                    new_cpu_suggestion = og_mem_suggestion
+
         # Make sure the suggestion is at least 1 CPU core and 1 GB of RAM
         new_cpu_suggestion = max(1, new_cpu_suggestion)
         new_mem_suggestion = max(1, new_mem_suggestion)
         updated_suggestion = new_cpu_suggestion, new_mem_suggestion
-        # TODO: check if updated_suggestion has been run before on the current settings. If it has, check that it performs well.
         return updated_suggestion
 
     # helpers for plotting
