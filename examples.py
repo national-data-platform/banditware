@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 from pre_process import preprocess
@@ -50,6 +51,8 @@ def main():
         save_dir2="matmul",
         model_choice2=Model.DECISION_TREE,
     )
+
+    query_metrics_and_suggest(features=None)
 
 
 def from_nothing(
@@ -133,6 +136,41 @@ def change_application(
     print("\nMatrix Multiplication")
     bw.change_application(data2, save_dir2, features2, model_choice2)
     bw.test_accuracy()
+
+
+def query_metrics_and_suggest(features=None):
+    """
+    Query performance metrics and suggest hardware for matrix multiplication based on performance metrics
+    """
+    data = None
+    # if save data is not already initalized, use new data
+    if not os.path.exists("bw_save_data/mm_time_new/bw_data.csv"):
+        data = pd.read_csv("preprocessed_data/matmul_w_time.csv")
+    bw = BanditWare(
+        data=data,
+        feature_cols=["size", "sparsity", "min", "max"],
+        save_dir="mm_time_new",
+        model_choice=Model.RANDOM_FOREST,
+        ndp_username="rshende",
+    )
+    print("Querying performance metrics...")
+    bw.query_performance_data(ndp_username="rshende", cpu=True, memory=True, gpu=False)
+    bools = [True, False]
+    for i in range(2):
+        prefer_recent = bools[i % 2]
+        print("prefer_recent_data=", prefer_recent)
+        print(
+            "Performance aware suggestion = ",
+            bw.suggest_hardware(
+                features=features,
+                tolerance_ratio=0.0,
+                tolerance_seconds=0,
+                prohibit_exploration=True,
+                update_epsilon=False,
+                smart_suggest=False,
+                prefer_recent_data=prefer_recent,
+            ),
+        )
 
 
 def print_title(title):
