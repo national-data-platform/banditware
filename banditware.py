@@ -136,6 +136,7 @@ class BanditWare:
         new_data: Union[pd.DataFrame, pd.Series],
         update_saved_data: bool = True,
         retrain: bool = True,
+        query: bool = False,
     ) -> None:
         """
         Add application run data to BanditWare historical data and optionally retrain models
@@ -143,6 +144,10 @@ class BanditWare:
             new_data: a dataframe containing all feature columns and runtimes
             update_saved_data: whether to save the new historical data
             retrain: whether to train the models on the newly added data
+            query: whether to query the performance data of the new total historical data
+                * if True, the following conditions must be met
+                * BanditWare.ndp_username is set
+                * historical_data must contain "start" and "end" columns, as timezone aware datetimes or timezoneaware representations (e.g. seconds since epoch, timezone aware strings)
         """
         needed_cols = ["runtime"] + self.feature_cols
         new_data = new_data.copy()
@@ -170,6 +175,8 @@ class BanditWare:
         self._fully_trained = False
         if retrain:
             self.train()
+        if query:
+            self.query_performance_data(cpu=True, memory=True)
 
     def predict_best_hardware(
         self,
