@@ -84,7 +84,7 @@ def from_nothing(
     for df in incremental_updates:
         bw.add_historical_data(df, update_saved_data=False, retrain=True)
         suggested_hardware = bw.suggest_hardware(
-            features, prohibit_exploration=prohibit_exploration, smart_suggest=True
+            features, prohibit_exploration=prohibit_exploration
         )
         print("\tsuggested_hardware:", suggested_hardware)
 
@@ -142,6 +142,7 @@ def query_metrics_and_suggest(features=None):
     """
     Query performance metrics and suggest hardware for matrix multiplication based on performance metrics
     """
+    print_title("Demonstrating Querying & Performance Aware Hardware Suggestions")
     data = None
     # if save data is not already initalized, use new data
     if not os.path.exists("bw_save_data/mm_time_new/bw_data.csv"):
@@ -158,18 +159,17 @@ def query_metrics_and_suggest(features=None):
     bools = [True, False]
     for i in range(2):
         prefer_recent = bools[i % 2]
-        print("prefer_recent_data=", prefer_recent)
         print(
-            "Performance aware suggestion = ",
+            "\tPerformance aware suggestion =",
             bw.suggest_hardware(
                 features=features,
                 tolerance_ratio=0.0,
                 tolerance_seconds=0,
                 prohibit_exploration=True,
                 update_epsilon=False,
-                smart_suggest=False,
                 prefer_recent_data=prefer_recent,
             ),
+            f"(prefer_recent_data = {prefer_recent})",
         )
 
 

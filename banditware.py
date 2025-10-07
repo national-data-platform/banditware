@@ -62,9 +62,6 @@ class BanditWare:
     NO_DATA_HARDWARE_SUGGESTION: Tuple[int, int] = (2, 16)  # (CPU count, GB of RAM)
     CPU_UTILIZATION_IDEAL_RANGE: Dict[str, float] = {"min": 0.5, "mid": 0.7, "max": 0.9}
     MEM_UTILIZATION_IDEAL_RANGE: Dict[str, float] = {"min": 0.5, "mid": 0.7, "max": 0.9}
-    # in `suggest_hardware`, what size self._historical_data must be to default set smart_suggest to False
-    SMART_SUGGEST_CUTOFF_SIZE: int = 1000
-    SMART_SUGGEST_DISTANCE_MAX: float = 0.01
     # =======================
     # Historical data columns
     # =======================
@@ -212,7 +209,6 @@ class BanditWare:
         tolerance_seconds: int = DEFAULT_TOLERANCE_SECONDS,
         prohibit_exploration: bool = False,
         update_epsilon: bool = True,
-        smart_suggest: Union[bool, None] = None,
         prefer_recent_data: bool = False,
     ) -> Tuple[int, int]:
         # TODO: implement optional parameter to more heavily weight recent data
@@ -230,10 +226,6 @@ class BanditWare:
                 * It will always choose the max tolerance between tolerance_ratio and tolerance_seconds.
             prohibit_exploration: whether to only exploit (choose the best predicted hardware) or possibly continue exploring as well
             update_epsilon: whether to slowly decrease exploration chances
-            smart_suggest: How to handle when no rows match the given feature set
-                * if smart_suggest is True, find the nearest existing feature set and make hardware suggestions off those runtime predictions. This is expensive if there is a lot of historical data.
-                * if smart_suggest is False, suggest the most common hardware in self._historical_data
-                * if smart_suggest is None (default), if there is a lot of historical data (>1000 rows), smart_suggest will be set to False. Otherwise True.
             prefer_recent_data: whether to give higher weight to more recent historical data
         Returns:
             hardware_suggestion: tuple of (CPU count, RAM amount in GB)
@@ -327,36 +319,6 @@ class BanditWare:
             return get_suggestion(pred_runtimes_by_hardware)
 
         # Handle if no rows match the given feature set
-
-        if smart_suggest is None:
-            smart_suggest = len(self._historical_data) < self.SMART_SUGGEST_CUTOFF_SIZE
-        if not smart_suggest:
-            # No smart_suggest -> predict the best hardware for that feature set
-            return get_suggestion(pred_runtimes_by_hardware)
-
-        # smart_suggest -> use gower distance to find most similar feature row
-        # then use that row if it is close enough in distance and has enough hardwares
-
-        # find closest features from historical data to the given features
-        target_row = pd.DataFrame(data=[features], columns=self.feature_cols)
-        feature_matrix = self._historical_data[self.feature_cols]
-        gower_dict = gower.gower_topn(target_row, feature_matrix, n=1)
-        closest_row_idx = gower_dict["index"][0]
-        gower_distance = gower_dict["values"][0]
-        closest_features = self._historical_data[self.feature_cols].iloc[
-            closest_row_idx
-        ]
-        closest_runtimes_by_hardware = self._get_hardware_avg_runtimes(
-            closest_features, self._hardwares, self._historical_data
-        )
-
-        # Decide whether to use predictions or closest feature set to suggest hardware
-        num_hardwares_w_data = sum(
-            not np.isnan(r) for r in closest_runtimes_by_hardware.values()
-        )
-        enough_real_data = num_hardwares_w_data >= num_reliably_predictable_hardwares
-        if enough_real_data and gower_distance <= self.SMART_SUGGEST_DISTANCE_MAX:
-            return get_suggestion(closest_runtimes_by_hardware)
         return get_suggestion(pred_runtimes_by_hardware)
 
     def train(self):
