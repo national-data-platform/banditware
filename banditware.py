@@ -218,7 +218,6 @@ class BanditWare:
         update_epsilon: bool = True,
         prefer_recent_data: bool = False,
     ) -> Tuple[int, int]:
-        # TODO: implement optional parameter to more heavily weight recent data
         """
         Give a suggestion for the hardware settings to run on next.
         This is the function to use for NDP default hardware suggestions.
@@ -1289,7 +1288,7 @@ class BanditWare:
                 * avg_mem_percent
                 / self.MEM_UTILIZATION_IDEAL_RANGE["mid"]
             )
-        # TODO: check if updated_suggestion has been run before on the current settings. If it has, check that it performs well before resuggesting it.
+        # check if updated_suggestion has been run before on the current settings. If it has, check that it performs well before resuggesting it.
         og_cpu_suggestion, og_mem_suggestion = suggestion
         df["hardware"] = df["hardware"].apply(HardwareManager.get_hardware)
         df["hw_cpu"] = df["hardware"].apply(lambda s: s.split("_")[0]).astype(int)

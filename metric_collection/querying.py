@@ -112,7 +112,6 @@ def _query_performance_metric(row: pd.Series, metric: str, ndp_username: str) ->
         hardware_spec=hardware_spec,
     )
 
-    # TODO: Handle if query_data() throws an error
     result = _query_data(query)
     if len(result) == 0 or len(result[0]["value"]) < 2:
         return -1
