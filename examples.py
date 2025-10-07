@@ -1,3 +1,10 @@
+"""
+Examples of some of the functionality of BanditWare.
+Comment out any function calls in main() that you don't wish to run.
+
+Look at the code in the functions to see examples of how to use BanditWare's various methods
+"""
+
 import os
 import pandas as pd
 import numpy as np
@@ -145,12 +152,12 @@ def query_metrics_and_suggest(features=None):
     print_title("Demonstrating Querying & Performance Aware Hardware Suggestions")
     data = None
     # if save data is not already initalized, use new data
-    if not os.path.exists("bw_save_data/mm_time_new/bw_data.csv"):
+    if not os.path.exists("bw_save_data/mm_time/bw_data.csv"):
         data = pd.read_csv("preprocessed_data/matmul_w_time.csv")
     bw = BanditWare(
         data=data,
         feature_cols=["size", "sparsity", "min", "max"],
-        save_dir="mm_time_new",
+        save_dir="mm_time",
         model_choice=Model.RANDOM_FOREST,
         ndp_username="rshende",
     )
@@ -174,7 +181,9 @@ def query_metrics_and_suggest(features=None):
 
 
 def print_title(title):
-    print("\n", "=" * 50, title, "=" * 50, "", sep="\n")
+    padding = " " * 4
+    border = "=" * (len(title) + 2 * len(padding))
+    print("\n", border, padding + title + padding, border, "", sep="\n")
 
 
 if __name__ == "__main__":
