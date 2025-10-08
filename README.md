@@ -26,3 +26,7 @@
 2. In the terminal, if you have a data folder, run `python3 pre_process.py --base_path={PATH_TO_DATA}` where `PATH_TO_DATA` is the path from step 1. If you have a single csv, run `python3 pre_process.py --data_file={PATH_TO_DATA_FILE}, where PATH_TO_DATA_FILE is the csv defined in part 1.
    - For example, `python3 pre_process.py --base_path=data/bp3d_data` or `python3 pre_process.py --base_path=data/matmul.csv`
 3. Finally, to see some of the functionality of BanditWare, run `examples.py` after selecting the dataset you would like to run on and specifying the feature columns of that dataset.
+
+# Contributing
+
+For anyone looking to contribute, please see [CONTRIBUTING.md](CONTRIBUTING.md).
