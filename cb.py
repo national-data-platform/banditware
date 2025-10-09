@@ -72,7 +72,7 @@ def load_data(*feature_cols: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
     _data = pd.read_csv(f"{this_dir}/results/data/data.csv")
     # Replace the hardware name with an integer identifier in hardware manager
     _data["hardware"] = _data["hardware"].apply(
-        lambda x: int(HardwareManager.get_hardware_idx(x))
+        lambda x: int(HardwareManager.hardware_idx_from_str(x))
     )
 
     unique_features = _data[feature_cols].drop_duplicates().values

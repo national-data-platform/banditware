@@ -3,4 +3,5 @@ pandas==2.3.0
 scikit-learn==1.7.0
 plotly==6.1.2
 kaleido==1.0.0
-gower==0.1.2
+requests==2.32.5
+tqdm==4.67.1

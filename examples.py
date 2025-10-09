@@ -1,3 +1,11 @@
+"""
+Examples of some of the functionality of BanditWare.
+Comment out any function calls in main() that you don't wish to run.
+
+Look at the code in the functions to see examples of how to use BanditWare's various methods
+"""
+
+import os
 import pandas as pd
 import numpy as np
 from pre_process import preprocess
@@ -51,6 +59,8 @@ def main():
         model_choice2=Model.DECISION_TREE,
     )
 
+    query_metrics_and_suggest(features=None)
+
 
 def from_nothing(
     full_data, feature_cols, model_choice, features=None, prohibit_exploration=False
@@ -81,7 +91,7 @@ def from_nothing(
     for df in incremental_updates:
         bw.add_historical_data(df, update_saved_data=False, retrain=True)
         suggested_hardware = bw.suggest_hardware(
-            features, prohibit_exploration=prohibit_exploration, smart_suggest=True
+            features, prohibit_exploration=prohibit_exploration
         )
         print("\tsuggested_hardware:", suggested_hardware)
 
@@ -135,8 +145,45 @@ def change_application(
     bw.test_accuracy()
 
 
+def query_metrics_and_suggest(features=None):
+    """
+    Query performance metrics and suggest hardware for matrix multiplication based on performance metrics
+    """
+    print_title("Demonstrating Querying & Performance Aware Hardware Suggestions")
+    data = None
+    # if save data is not already initalized, use new data
+    if not os.path.exists("bw_save_data/mm_time/bw_data.csv"):
+        data = pd.read_csv("preprocessed_data/matmul_w_time.csv")
+    bw = BanditWare(
+        data=data,
+        feature_cols=["size", "sparsity", "min", "max"],
+        save_dir="mm_time",
+        model_choice=Model.RANDOM_FOREST,
+        ndp_username="rshende",
+    )
+    print("Querying performance metrics...")
+    bw.query_performance_data(ndp_username="rshende", cpu=True, memory=True, gpu=False)
+    bools = [True, False]
+    for i in range(2):
+        prefer_recent = bools[i % 2]
+        print(
+            "\tPerformance aware suggestion =",
+            bw.suggest_hardware(
+                features=features,
+                tolerance_ratio=0.0,
+                tolerance_seconds=0,
+                prohibit_exploration=True,
+                update_epsilon=False,
+                prefer_recent_data=prefer_recent,
+            ),
+            f"(prefer_recent_data = {prefer_recent})",
+        )
+
+
 def print_title(title):
-    print("\n", "=" * 50, title, "=" * 50, "", sep="\n")
+    padding = " " * 4
+    border = "=" * (len(title) + 2 * len(padding))
+    print("\n", border, padding + title + padding, border, "", sep="\n")
 
 
 if __name__ == "__main__":

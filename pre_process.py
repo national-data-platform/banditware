@@ -2,7 +2,6 @@ import pathlib
 import json
 import argparse
 import pandas as pd
-import enum
 import os
 import re
 from typing import Dict, Union
